@@ -1,4 +1,8 @@
-import {SphereGeometry} from '@luma.gl/core';
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
+import {SphereGeometry} from '@luma.gl/engine';
 import {
   COORDINATE_SYSTEM,
   _GlobeView as GlobeView,
@@ -97,9 +101,7 @@ export default [
       viewState: {
         longitude: -100,
         latitude: 80,
-        zoom: 0,
-        pitch: 0,
-        bearing: 0
+        zoom: -1
       },
       layers: [
         new SimpleMeshLayer({
@@ -118,11 +120,7 @@ export default [
           stroked: false,
           getFillColor: [0, 0, 0],
           onTileError: error => {
-            if (error.message.includes('404')) {
-              // trying to load tiles in the previous viewport, ignore
-            } else {
-              throw error;
-            }
+            //ignore missing tiles
           },
           lineWidthMinPixels: 1,
           binary,

@@ -1,3 +1,7 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
 import {readPackedTypedArray} from './fast-pbf';
 
 // KeyValueObject ========================================
@@ -8,7 +12,7 @@ interface KeyValueObject {
 
 class KeyValueObjectReader {
   static read(pbf, end?: number): KeyValueObject {
-    return pbf.readFields(KeyValueObjectReader._readField, {key: '', value: ''}, end);
+    return pbf.readFields(KeyValueObjectReader._readField, {key: '', value: null}, end);
   }
   static _readField(this: void, tag: number, obj: KeyValueObject, pbf) {
     if (tag === 1) obj.key = pbf.readString();
@@ -33,14 +37,14 @@ export class PropertiesReader {
 // Doubles ========================================
 
 interface Doubles {
-  value: Float32Array;
+  value: Float64Array;
   size: number;
 }
 
 class DoublesReader {
   static read(pbf, end?: number): Doubles {
     const {value, size} = pbf.readFields(DoublesReader._readField, {value: [], size: 0}, end);
-    return {value: new Float32Array(value), size};
+    return {value, size};
   }
   static _readField(this: void, tag: number, obj, pbf) {
     if (tag === 1) readPackedTypedArray(Float64Array, pbf, obj);

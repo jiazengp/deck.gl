@@ -1,27 +1,12 @@
-// Copyright (c) 2015 - 2017 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
 
 import {Layer, project32, picking, UNIT} from '@deck.gl/core';
-import GL from '@luma.gl/constants';
-import {Model, Geometry} from '@luma.gl/core';
+import {Geometry} from '@luma.gl/engine';
+import {Model} from '@luma.gl/engine';
 
+import {scatterplotUniforms, ScatterplotProps} from './scatterplot-layer-uniforms';
 import vs from './scatterplot-layer-vertex.glsl';
 import fs from './scatterplot-layer-fragment.glsl';
 
@@ -39,7 +24,7 @@ import type {
 const DEFAULT_COLOR: [number, number, number, number] = [0, 0, 0, 255];
 
 /** All props supported by the ScatterplotLayer */
-export type ScatterplotLayerProps<DataT = any> = _ScatterplotLayerProps<DataT> & LayerProps;
+export type ScatterplotLayerProps<DataT = unknown> = _ScatterplotLayerProps<DataT> & LayerProps;
 
 /** Props added by the ScatterplotLayer */
 type _ScatterplotLayerProps<DataT> = {
@@ -161,7 +146,7 @@ const defaultProps: DefaultProps<ScatterplotLayerProps> = {
   billboard: false,
   antialiasing: true,
 
-  getPosition: {type: 'accessor', value: x => x.position},
+  getPosition: {type: 'accessor', value: (x: any) => x.position},
   getRadius: {type: 'accessor', value: 1},
   getFillColor: {type: 'accessor', value: DEFAULT_COLOR},
   getLineColor: {type: 'accessor', value: DEFAULT_COLOR},
@@ -180,15 +165,23 @@ export default class ScatterplotLayer<DataT = any, ExtraPropsT extends {} = {}> 
   static defaultProps = defaultProps;
   static layerName: string = 'ScatterplotLayer';
 
+  state!: {
+    model?: Model;
+  };
+
   getShaders() {
-    return super.getShaders({vs, fs, modules: [project32, picking]});
+    return super.getShaders({
+      vs,
+      fs,
+      modules: [project32, picking, scatterplotUniforms]
+    });
   }
 
   initializeState() {
     this.getAttributeManager()!.addInstanced({
       instancePositions: {
         size: 3,
-        type: GL.DOUBLE,
+        type: 'float64',
         fp64: this.use64bitPositions(),
         transition: true,
         accessor: 'getPosition'
@@ -202,16 +195,14 @@ export default class ScatterplotLayer<DataT = any, ExtraPropsT extends {} = {}> 
       instanceFillColors: {
         size: this.props.colorFormat.length,
         transition: true,
-        normalized: true,
-        type: GL.UNSIGNED_BYTE,
+        type: 'unorm8',
         accessor: 'getFillColor',
         defaultValue: [0, 0, 0, 255]
       },
       instanceLineColors: {
         size: this.props.colorFormat.length,
         transition: true,
-        normalized: true,
-        type: GL.UNSIGNED_BYTE,
+        type: 'unorm8',
         accessor: 'getLineColor',
         defaultValue: [0, 0, 0, 255]
       },
@@ -228,9 +219,8 @@ export default class ScatterplotLayer<DataT = any, ExtraPropsT extends {} = {}> 
     super.updateState(params);
 
     if (params.changeFlags.extensionsChanged) {
-      const {gl} = this.context;
-      this.state.model?.delete();
-      this.state.model = this._getModel(gl);
+      this.state.model?.destroy();
+      this.state.model = this._getModel();
       this.getAttributeManager()!.invalidateAll();
     }
   }
@@ -250,36 +240,34 @@ export default class ScatterplotLayer<DataT = any, ExtraPropsT extends {} = {}> 
       lineWidthMinPixels,
       lineWidthMaxPixels
     } = this.props;
-
-    this.state.model
-      .setUniforms(uniforms)
-      .setUniforms({
-        stroked: stroked ? 1 : 0,
-        filled,
-        billboard,
-        antialiasing,
-        radiusUnits: UNIT[radiusUnits],
-        radiusScale,
-        radiusMinPixels,
-        radiusMaxPixels,
-        lineWidthUnits: UNIT[lineWidthUnits],
-        lineWidthScale,
-        lineWidthMinPixels,
-        lineWidthMaxPixels
-      })
-      .draw();
+    const scatterplotProps: ScatterplotProps = {
+      stroked,
+      filled,
+      billboard,
+      antialiasing,
+      radiusUnits: UNIT[radiusUnits],
+      radiusScale,
+      radiusMinPixels,
+      radiusMaxPixels,
+      lineWidthUnits: UNIT[lineWidthUnits],
+      lineWidthScale,
+      lineWidthMinPixels,
+      lineWidthMaxPixels
+    };
+    const model = this.state.model!;
+    model.shaderInputs.setProps({scatterplot: scatterplotProps});
+    model.draw(this.context.renderPass);
   }
 
-  protected _getModel(gl) {
+  protected _getModel() {
     // a square that minimally cover the unit circle
-    const positions = [-1, -1, 0, 1, -1, 0, 1, 1, 0, -1, 1, 0];
-
-    return new Model(gl, {
+    const positions = [-1, -1, 0, 1, -1, 0, -1, 1, 0, 1, 1, 0];
+    return new Model(this.context.device, {
       ...this.getShaders(),
       id: this.props.id,
+      bufferLayout: this.getAttributeManager()!.getBufferLayouts(),
       geometry: new Geometry({
-        drawMode: GL.TRIANGLE_FAN,
-        vertexCount: 4,
+        topology: 'triangle-strip',
         attributes: {
           positions: {size: 3, value: new Float32Array(positions)}
         }

@@ -1,23 +1,8 @@
-// Copyright (c) 2015 - 2019 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
-import {Widget} from './widget-manager';
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
+import type {Widget, WidgetPlacement} from './widget-manager';
 import type {PickingInfo} from './picking/pick-info';
 import type Viewport from '../viewports/viewport';
 import type Deck from './deck';
@@ -46,12 +31,15 @@ export type TooltipContent =
     };
 
 export default class Tooltip implements Widget {
+  id = 'default-tooltip';
+  placement: WidgetPlacement = 'fill';
+  props = {};
   isVisible: boolean = false;
-  deck?: Deck;
+  deck?: Deck<any>;
   element?: HTMLDivElement;
   lastViewport?: Viewport;
 
-  onAdd({deck}: {deck: Deck}): HTMLDivElement {
+  onAdd({deck}: {deck: Deck<any>}): HTMLDivElement {
     const el = document.createElement('div');
     el.className = 'deck-tooltip';
     Object.assign(el.style, defaultStyle);
@@ -66,6 +54,8 @@ export default class Tooltip implements Widget {
     this.deck = undefined;
     this.element = undefined;
   }
+
+  setProps() {}
 
   onViewportChange(viewport: Viewport) {
     if (this.isVisible && viewport.id === this.lastViewport?.id && viewport !== this.lastViewport) {

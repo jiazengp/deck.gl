@@ -37,7 +37,7 @@ If you consider opening a PR, here is some documentation to get you started:
 
 Each example can be run so that it is built against the deck.gl source code in this repo instead of building against the installed version of deck.gl. This enables using the examples to debug the main deck.gl library source.
 
-To do so use the `yarn start-local` command present in each example's directory. See [webpack.config.local.js](https://github.com/visgl/deck.gl/blob/master/examples/webpack.config.local.js) for details.
+To do so use the `yarn start-local` command present in each example's directory. See [vite.config.local.mjs](https://github.com/visgl/deck.gl/blob/master/examples/vite.config.local.mjs) for details.
 
 ### Working with other vis.gl dependencies
 
@@ -78,7 +78,7 @@ deck.gl development is governed by the vis.gl Technical Steering Committee (TSC)
 
 Maintainers of deck.gl have commit access to this GitHub repository, and take part in the decision making process.
 
-If you are interested in becoming a maintainer, read the [governance guidelines](https://github.com/visgl/tsc/tree/master/developer-process/governance.md).
+If you are interested in becoming a maintainer, read the [governance guidelines](https://github.com/visgl/tsc/blob/master/governance.md).
 
 The vis.gl TSC meets monthly and publishes meeting notes via a [mailing list](https://lists.uc.foundation/g/visgl).
 This mailing list can also be utilized to reach out to the TSC.
@@ -133,6 +133,13 @@ Follow instructions for [developing on linux](#develop-on-linux).
 To install dependencies specify that you explicitly need the arm64 version
 ```
 arch -arm64 brew install pkg-config cairo pango libpng jpeg giflib librsvg
+```
+
+You also need a system-wide Python available (`python`). For example, it can be installed using Homebrew and then symlinked:
+
+```
+brew install python
+sudo ln -s /opt/homebrew/bin/python3 /opt/homebrew/bin/python
 ```
 
 After this `yarn bootstrap` can be run with

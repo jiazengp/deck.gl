@@ -1,9 +1,20 @@
-import {Deck, assert} from '@deck.gl/core';
-import {getViewState, getDeckInstance, removeDeckInstance, getInterleavedProps} from './deck-utils';
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
 
-import type {Map, IControl, MapMouseEvent} from 'mapbox-gl';
+import {Deck, assert} from '@deck.gl/core';
+import {
+  getViewState,
+  getDefaultView,
+  getDeckInstance,
+  removeDeckInstance,
+  getDefaultParameters
+} from './deck-utils';
+
+import type {Map, IControl, MapMouseEvent, ControlPosition} from './types';
 import type {MjolnirGestureEvent, MjolnirPointerEvent} from 'mjolnir.js';
 import type {DeckProps} from '@deck.gl/core';
+import {log} from '@deck.gl/core';
 
 import {resolveLayers} from './resolve-layers';
 
@@ -28,7 +39,7 @@ export type MapboxOverlayProps = Omit<
  */
 export default class MapboxOverlay implements IControl {
   private _props: MapboxOverlayProps;
-  private _deck?: Deck;
+  private _deck?: Deck<any>;
   private _map?: Map;
   private _container?: HTMLDivElement;
   private _interleaved: boolean;
@@ -48,8 +59,14 @@ export default class MapboxOverlay implements IControl {
 
     Object.assign(this._props, props);
 
-    if (this._deck) {
-      this._deck.setProps(this._interleaved ? getInterleavedProps(this._props) : this._props);
+    if (this._deck && this._map) {
+      this._deck.setProps({
+        ...this._props,
+        parameters: {
+          ...getDefaultParameters(this._map, this._interleaved),
+          ...this._props.parameters
+        }
+      });
     }
   }
 
@@ -66,13 +83,16 @@ export default class MapboxOverlay implements IControl {
       position: 'absolute',
       left: 0,
       top: 0,
+      textAlign: 'initial',
       pointerEvents: 'none'
     });
     this._container = container;
 
-    this._deck = new Deck({
+    this._deck = new Deck<any>({
       ...this._props,
       parent: container,
+      parameters: {...getDefaultParameters(map, false), ...this._props.parameters},
+      views: this._props.views || getDefaultView(map),
       viewState: getViewState(map)
     });
 
@@ -92,14 +112,19 @@ export default class MapboxOverlay implements IControl {
   }
 
   private _onAddInterleaved(map: Map): HTMLDivElement {
+    // @ts-ignore non-public map property
+    const gl = map.painter.context.gl;
+    if (gl instanceof WebGLRenderingContext) {
+      log.warn(
+        'Incompatible basemap library. See: https://deck.gl/docs/api-reference/mapbox/overview#compatibility'
+      )();
+    }
     this._deck = getDeckInstance({
       map,
-      // @ts-ignore non-public map property
-      gl: map.painter.context.gl,
+      gl,
       deck: new Deck({
         ...this._props,
-        // @ts-ignore non-public map property
-        gl: map.painter.context.gl
+        gl
       })
     });
 
@@ -146,7 +171,7 @@ export default class MapboxOverlay implements IControl {
     removeDeckInstance(map);
   }
 
-  getDefaultPosition() {
+  getDefaultPosition(): ControlPosition {
     return 'top-left';
   }
 
@@ -177,6 +202,14 @@ export default class MapboxOverlay implements IControl {
     }
   }
 
+  /** If interleaved: true, returns base map's canvas, otherwise forwards the Deck.getCanvas method. */
+  getCanvas(): HTMLCanvasElement | null {
+    if (!this._map) {
+      return null;
+    }
+    return this._interleaved ? this._map.getCanvas() : this._deck!.getCanvas();
+  }
+
   private _handleStyleChange = () => {
     resolveLayers(this._map, this._deck, this._props.layers, this._props.layers);
   };
@@ -193,9 +226,12 @@ export default class MapboxOverlay implements IControl {
 
   private _updateViewState = () => {
     const deck = this._deck;
-    if (deck) {
-      // @ts-ignore (2345) map is always defined if deck is
-      deck.setProps({viewState: getViewState(this._map)});
+    const map = this._map;
+    if (deck && map) {
+      deck.setProps({
+        views: this._props.views || getDefaultView(map),
+        viewState: getViewState(map)
+      });
       // Redraw immediately if view state has changed
       if (deck.isInitialized) {
         deck.redraw();
@@ -203,6 +239,7 @@ export default class MapboxOverlay implements IControl {
     }
   };
 
+  // eslint-disable-next-line complexity
   private _handleMouseEvent = (event: MapMouseEvent) => {
     const deck = this._deck;
     if (!deck || !deck.isInitialized) {
@@ -235,7 +272,7 @@ export default class MapboxOverlay implements IControl {
 
     switch (mockEvent.type) {
       case 'mousedown':
-        deck._onPointerDown(mockEvent as MjolnirGestureEvent);
+        deck._onPointerDown(mockEvent as unknown as MjolnirPointerEvent);
         this._lastMouseDownPoint = {
           ...event.point,
           clientX: event.originalEvent.clientX,
@@ -245,38 +282,38 @@ export default class MapboxOverlay implements IControl {
 
       case 'dragstart':
         mockEvent.type = 'panstart';
-        deck._onEvent(mockEvent as MjolnirGestureEvent);
+        deck._onEvent(mockEvent as unknown as MjolnirGestureEvent);
         break;
 
       case 'drag':
         mockEvent.type = 'panmove';
-        deck._onEvent(mockEvent as MjolnirGestureEvent);
+        deck._onEvent(mockEvent as unknown as MjolnirGestureEvent);
         break;
 
       case 'dragend':
         mockEvent.type = 'panend';
-        deck._onEvent(mockEvent as MjolnirGestureEvent);
+        deck._onEvent(mockEvent as unknown as MjolnirGestureEvent);
         break;
 
       case 'click':
         mockEvent.tapCount = 1;
-        deck._onEvent(mockEvent as MjolnirGestureEvent);
+        deck._onEvent(mockEvent as unknown as MjolnirGestureEvent);
         break;
 
       case 'dblclick':
         mockEvent.type = 'click';
         mockEvent.tapCount = 2;
-        deck._onEvent(mockEvent as MjolnirGestureEvent);
+        deck._onEvent(mockEvent as unknown as MjolnirGestureEvent);
         break;
 
       case 'mousemove':
         mockEvent.type = 'pointermove';
-        deck._onPointerMove(mockEvent as MjolnirPointerEvent);
+        deck._onPointerMove(mockEvent as unknown as MjolnirPointerEvent);
         break;
 
       case 'mouseout':
         mockEvent.type = 'pointerleave';
-        deck._onPointerMove(mockEvent as MjolnirPointerEvent);
+        deck._onPointerMove(mockEvent as unknown as MjolnirPointerEvent);
         break;
 
       default:

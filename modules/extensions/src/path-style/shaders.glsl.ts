@@ -1,10 +1,14 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
 export const dashShaders = {
   inject: {
     'vs:#decl': `
-attribute vec2 instanceDashArrays;
-attribute float instanceDashOffsets;
-varying vec2 vDashArray;
-varying float vDashOffset;
+in vec2 instanceDashArrays;
+in float instanceDashOffsets;
+out vec2 vDashArray;
+out float vDashOffset;
 `,
 
     'vs:#main-end': `
@@ -13,15 +17,13 @@ vDashOffset = instanceDashOffsets / width.x;
 `,
 
     'fs:#decl': `
-uniform float dashAlignMode;
-uniform float capType;
-uniform bool dashGapPickable;
-varying vec2 vDashArray;
-varying float vDashOffset;
+uniform pathStyleUniforms {
+  float dashAlignMode;
+  bool dashGapPickable;
+} pathStyle;
 
-float round(float x) {
-  return floor(x + 0.5);
-}
+in vec2 vDashArray;
+in float vDashOffset;
 `,
 
     // if given position is in the gap part of the dashed line
@@ -40,7 +42,7 @@ float round(float x) {
   float offset;
 
   if (unitLength > 0.0) {
-    if (dashAlignMode == 0.0) {
+    if (pathStyle.dashAlignMode == 0.0) {
       offset = vDashOffset;
     } else {
       unitLength = vPathLength / round(vPathLength / unitLength);
@@ -50,8 +52,8 @@ float round(float x) {
     float unitOffset = mod(vPathPosition.y + offset, unitLength);
 
     if (gapLength > 0.0 && unitOffset > solidLength) {
-      if (capType <= 0.5) {
-        if (!(dashGapPickable && picking_uActive)) {
+      if (path.capType <= 0.5) {
+        if (!(pathStyle.dashGapPickable && bool(picking.isActive))) {
           discard;
         }
       } else {
@@ -61,7 +63,7 @@ float round(float x) {
           vPathPosition.x
         ));
         if (distToEnd > 1.0) {
-          if (!(dashGapPickable && picking_uActive)) {
+          if (!(pathStyle.dashGapPickable && bool(picking.isActive))) {
             discard;
           }
         }
@@ -75,7 +77,7 @@ float round(float x) {
 export const offsetShaders = {
   inject: {
     'vs:#decl': `
-attribute float instanceOffsets;
+in float instanceOffsets;
 `,
     'vs:DECKGL_FILTER_SIZE': `
   float offsetWidth = abs(instanceOffsets * 2.0) + 1.0;

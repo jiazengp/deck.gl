@@ -1,29 +1,39 @@
-import {Framebuffer, Texture2D, isWebGL2} from '@luma.gl/core';
-import GL from '@luma.gl/constants';
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
+import type {Device} from '@luma.gl/core';
+import {GL} from '@luma.gl/constants';
 
 export function createRenderTarget(
-  gl: WebGLRenderingContext,
+  device: Device,
   opts: {
     id: string;
     float?: boolean;
+    interpolate?: boolean;
   }
 ) {
-  return new Framebuffer(gl, {
+  return device.createFramebuffer({
     id: opts.id,
-    attachments: {
-      [gl.COLOR_ATTACHMENT0]: new Texture2D(gl, {
+    colorAttachments: [
+      device.createTexture({
+        id: opts.id,
         ...(opts.float && {
-          format: isWebGL2(gl) ? GL.RGBA32F : GL.RGBA,
+          format: 'rgba32float',
           type: GL.FLOAT
         }),
         mipmaps: false,
-        parameters: {
-          [gl.TEXTURE_MIN_FILTER]: gl.LINEAR,
-          [gl.TEXTURE_MAG_FILTER]: gl.LINEAR,
-          [gl.TEXTURE_WRAP_S]: gl.CLAMP_TO_EDGE,
-          [gl.TEXTURE_WRAP_T]: gl.CLAMP_TO_EDGE
-        }
+        sampler:
+          opts.interpolate === false
+            ? {
+                minFilter: 'nearest',
+                magFilter: 'nearest'
+              }
+            : {
+                minFilter: 'linear',
+                magFilter: 'linear'
+              }
       })
-    }
+    ]
   });
 }
