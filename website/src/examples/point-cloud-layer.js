@@ -1,3 +1,7 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
 import React, {Component} from 'react';
 import {readableInteger} from '../utils/format-utils';
 import {GITHUB_TREE} from '../constants/defaults';
@@ -30,7 +34,9 @@ class PointCloudDemo extends Component {
   };
 
   render() {
-    return <App onLoad={this._onLoad} />;
+    return <div style={{width: '100%', height: '100%', background: '#ecdbce'}}>
+      <App onLoad={this._onLoad} />
+    </div>;
   }
 }
 

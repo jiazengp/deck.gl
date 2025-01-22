@@ -1,6 +1,10 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
 /* global google */
-import {getParameters, setParameters, withParameters} from '@luma.gl/core';
-import GL from '@luma.gl/constants';
+import {GL, GLParameters} from '@luma.gl/constants';
+import {WebGLDevice} from '@luma.gl/webgl';
 import {
   createDeckInstance,
   destroyDeckInstance,
@@ -9,10 +13,11 @@ import {
 } from './utils';
 import {Deck} from '@deck.gl/core';
 
-import type {DeckProps} from '@deck.gl/core';
+import type {DeckProps, MapViewState} from '@deck.gl/core';
+import type {Device} from '@luma.gl/core';
 
 const HIDE_ALL_LAYERS = () => false;
-const GL_STATE = {
+const GL_STATE: GLParameters = {
   depthMask: true,
   depthTest: true,
   blend: true,
@@ -27,7 +32,19 @@ const defaultProps = {
   interleaved: true
 };
 
-export type GoogleMapsOverlayProps = DeckProps & {
+export type GoogleMapsOverlayProps = Omit<
+  DeckProps,
+  | 'width'
+  | 'height'
+  | 'gl'
+  | 'deviceProps'
+  | 'parent'
+  | 'canvas'
+  | '_customRender'
+  | 'viewState'
+  | 'initialViewState'
+  | 'controller'
+> & {
   interleaved?: boolean;
 };
 
@@ -76,9 +93,9 @@ export default class GoogleMapsOverlay {
   setProps(props: Partial<GoogleMapsOverlayProps>): void {
     Object.assign(this.props, props);
     if (this._deck) {
-      if (props.style) {
-        // @ts-ignore accessing protected member
-        const parentStyle = this._deck.canvas.parentElement.style;
+      const canvas = this._deck.getCanvas();
+      if (props.style && canvas?.parentElement) {
+        const parentStyle = canvas.parentElement.style;
         Object.assign(parentStyle, props.style);
         props.style = null;
       }
@@ -169,11 +186,13 @@ export default class GoogleMapsOverlay {
     // animationLoop.onRender. We override this to wrap
     // in withParameters so we don't modify the GL state
     // @ts-ignore accessing protected member
-    const {animationLoop} = deck;
+    const animationLoop = deck.animationLoop!;
     animationLoop._renderFrame = () => {
       const ab = gl.getParameter(gl.ARRAY_BUFFER_BINDING);
-      withParameters(gl, {}, () => {
-        animationLoop.onRender();
+      // @ts-expect-error accessing protected member
+      const device: Device = deck.device;
+      device.withParametersWebGL({}, () => {
+        animationLoop.props.onRender(animationLoop.animationProps!);
       });
       gl.bindBuffer(gl.ARRAY_BUFFER, ab);
     };
@@ -202,16 +221,20 @@ export default class GoogleMapsOverlay {
       this._overlay as google.maps.OverlayView
     );
 
-    // @ts-ignore accessing protected member
-    const parentStyle = deck.canvas.parentElement.style;
-    parentStyle.left = `${left}px`;
-    parentStyle.top = `${top}px`;
+    const canvas = deck.getCanvas();
+    const parent = canvas?.parentElement || deck.props.parent;
+    if (parent) {
+      const parentStyle = parent.style;
+      parentStyle.left = `${left}px`;
+      parentStyle.top = `${top}px`;
+    }
 
     const altitude = 10000;
     deck.setProps({
       width,
       height,
-      viewState: {altitude, repeat: true, ...rest}
+      // @ts-expect-error altitude is accepted by WebMercatorViewport but not exposed by type
+      viewState: {altitude, ...rest} as MapViewState
     });
     // Deck is initialized
     deck.redraw();
@@ -234,10 +257,19 @@ export default class GoogleMapsOverlay {
     });
 
     if (deck.isInitialized) {
+      // @ts-expect-error
+      const device: Device = deck.device;
+
       // As an optimization, some renders are to an separate framebuffer
       // which we need to pass onto deck
-      const _framebuffer = getParameters(gl, GL.FRAMEBUFFER_BINDING);
-      deck.setProps({_framebuffer});
+      if (device instanceof WebGLDevice) {
+        const _framebuffer = device.getParametersWebGL(GL.FRAMEBUFFER_BINDING);
+        deck.setProps({_framebuffer});
+      }
+
+      // With external gl context, animation loop doesn't resize webgl-canvas and thus fails to
+      // calculate corrext pixel ratio. Force this manually.
+      device.getDefaultCanvasContext().resize();
 
       // Camera changed, will trigger a map repaint right after this
       // Clear any change flag triggered by setting viewState so that deck does not request
@@ -246,17 +278,19 @@ export default class GoogleMapsOverlay {
 
       // Workaround for bug in Google maps where viewport state is wrong
       // TODO remove once fixed
-      setParameters(gl, {
-        viewport: [0, 0, gl.canvas.width, gl.canvas.height],
-        scissor: [0, 0, gl.canvas.width, gl.canvas.height],
-        stencilFunc: [gl.ALWAYS, 0, 255, gl.ALWAYS, 0, 255]
-      });
-
-      withParameters(gl, GL_STATE, () => {
-        deck._drawLayers('google-vector', {
-          clearCanvas: false
+      if (device instanceof WebGLDevice) {
+        device.setParametersWebGL({
+          viewport: [0, 0, gl.canvas.width, gl.canvas.height],
+          scissor: [0, 0, gl.canvas.width, gl.canvas.height],
+          stencilFunc: [gl.ALWAYS, 0, 255, gl.ALWAYS, 0, 255]
         });
-      });
+
+        device.withParametersWebGL(GL_STATE, () => {
+          deck._drawLayers('google-vector', {
+            clearCanvas: false
+          });
+        });
+      }
     }
   }
 

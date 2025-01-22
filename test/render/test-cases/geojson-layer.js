@@ -1,3 +1,7 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
 import {
   LightingEffect,
   AmbientLight,
@@ -13,7 +17,7 @@ import capitals from 'deck.gl-test/data/us-state-capitals.geo.json';
 import {iconAtlas as iconMapping} from 'deck.gl-test/data';
 import {parseColor, setOpacity} from '../../../examples/layer-browser/src/utils/color';
 import {SimpleMeshLayer} from '@deck.gl/mesh-layers';
-import {SphereGeometry} from '@luma.gl/core';
+import {SphereGeometry} from '@luma.gl/engine';
 
 import {OS} from '../constants';
 

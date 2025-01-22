@@ -1,3 +1,8 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
+// deck.gl, MIT license
 import ComponentState from '../lifecycle/component-state';
 
 import type Layer from './layer';

@@ -1,3 +1,7 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
 /* global window, document */
 
 // See https://github.com/jupyter-widgets/widget-ts-cookiecutter/blob/master/%7B%7Bcookiecutter.github_project_name%7D%7D/src/extension.ts
@@ -11,6 +15,7 @@ import jupyterTransport from './lib/jupyter-transport';
 import JupyterTransportModel from './lib/jupyter-transport-model';
 import JupyterTransportView from './lib/jupyter-transport-view';
 
+// eslint-disable-next-line import/namespace
 import * as deckExports from './deck-bundle';
 import * as lumaExports from '@deck.gl/core/scripting/lumagl';
 import * as loadersExports from '@deck.gl/core/scripting/loadersgl';
