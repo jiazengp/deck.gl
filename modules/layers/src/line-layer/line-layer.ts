@@ -1,22 +1,6 @@
-// Copyright (c) 2015 - 2017 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
 
 import {
   Layer,
@@ -32,17 +16,18 @@ import {
   UpdateParameters,
   DefaultProps
 } from '@deck.gl/core';
-import GL from '@luma.gl/constants';
-import {Model, Geometry} from '@luma.gl/core';
+import {Geometry} from '@luma.gl/engine';
+import {Model} from '@luma.gl/engine';
 
+import {lineUniforms, LineProps} from './line-layer-uniforms';
 import vs from './line-layer-vertex.glsl';
 import fs from './line-layer-fragment.glsl';
 
 const DEFAULT_COLOR: [number, number, number, number] = [0, 0, 0, 255];
 
 const defaultProps: DefaultProps<LineLayerProps> = {
-  getSourcePosition: {type: 'accessor', value: x => x.sourcePosition},
-  getTargetPosition: {type: 'accessor', value: x => x.targetPosition},
+  getSourcePosition: {type: 'accessor', value: (x: any) => x.sourcePosition},
+  getTargetPosition: {type: 'accessor', value: (x: any) => x.targetPosition},
   getColor: {type: 'accessor', value: DEFAULT_COLOR},
   getWidth: {type: 'accessor', value: 1},
 
@@ -53,7 +38,7 @@ const defaultProps: DefaultProps<LineLayerProps> = {
 };
 
 /** All properties supported by LineLayer. */
-export type LineLayerProps<DataT = any> = _LineLayerProps<DataT> & LayerProps;
+export type LineLayerProps<DataT = unknown> = _LineLayerProps<DataT> & LayerProps;
 
 /** Properties added by LineLayer. */
 type _LineLayerProps<DataT> = {
@@ -116,6 +101,10 @@ export default class LineLayer<DataT = any, ExtraProps extends {} = {}> extends 
   static layerName = 'LineLayer';
   static defaultProps = defaultProps;
 
+  state!: {
+    model?: Model;
+  };
+
   getBounds(): [number[], number[]] | null {
     return this.getAttributeManager()?.getBounds([
       'instanceSourcePositions',
@@ -124,7 +113,7 @@ export default class LineLayer<DataT = any, ExtraProps extends {} = {}> extends 
   }
 
   getShaders() {
-    return super.getShaders({vs, fs, modules: [project32, picking]});
+    return super.getShaders({vs, fs, modules: [project32, picking, lineUniforms]});
   }
 
   // This layer has its own wrapLongitude logic
@@ -139,22 +128,21 @@ export default class LineLayer<DataT = any, ExtraProps extends {} = {}> extends 
     attributeManager.addInstanced({
       instanceSourcePositions: {
         size: 3,
-        type: GL.DOUBLE,
+        type: 'float64',
         fp64: this.use64bitPositions(),
         transition: true,
         accessor: 'getSourcePosition'
       },
       instanceTargetPositions: {
         size: 3,
-        type: GL.DOUBLE,
+        type: 'float64',
         fp64: this.use64bitPositions(),
         transition: true,
         accessor: 'getTargetPosition'
       },
       instanceColors: {
         size: this.props.colorFormat.length,
-        type: GL.UNSIGNED_BYTE,
-        normalized: true,
+        type: 'unorm8',
         transition: true,
         accessor: 'getColor',
         defaultValue: [0, 0, 0, 255]
@@ -173,38 +161,33 @@ export default class LineLayer<DataT = any, ExtraProps extends {} = {}> extends 
     super.updateState(params);
 
     if (params.changeFlags.extensionsChanged) {
-      const {gl} = this.context;
-      this.state.model?.delete();
-      this.state.model = this._getModel(gl);
+      this.state.model?.destroy();
+      this.state.model = this._getModel();
       this.getAttributeManager()!.invalidateAll();
     }
   }
 
   draw({uniforms}): void {
     const {widthUnits, widthScale, widthMinPixels, widthMaxPixels, wrapLongitude} = this.props;
-
-    this.state.model
-      .setUniforms(uniforms)
-      .setUniforms({
-        widthUnits: UNIT[widthUnits],
-        widthScale,
-        widthMinPixels,
-        widthMaxPixels,
-        useShortestPath: wrapLongitude ? 1 : 0
-      })
-      .draw();
+    const model = this.state.model!;
+    const lineProps: LineProps = {
+      widthUnits: UNIT[widthUnits],
+      widthScale,
+      widthMinPixels,
+      widthMaxPixels,
+      useShortestPath: wrapLongitude ? 1 : 0
+    };
+    model.shaderInputs.setProps({line: lineProps});
+    model.draw(this.context.renderPass);
 
     if (wrapLongitude) {
       // Render a second copy for the clipped lines at the 180th meridian
-      this.state.model
-        .setUniforms({
-          useShortestPath: -1
-        })
-        .draw();
+      model.shaderInputs.setProps({line: {...lineProps, useShortestPath: -1}});
+      model.draw(this.context.renderPass);
     }
   }
 
-  protected _getModel(gl: WebGLRenderingContext): Model {
+  protected _getModel(): Model {
     /*
      *  (0, -1)-------------_(1, -1)
      *       |          _,-"  |
@@ -214,13 +197,14 @@ export default class LineLayer<DataT = any, ExtraProps extends {} = {}> extends 
      */
     const positions = [0, -1, 0, 0, 1, 0, 1, -1, 0, 1, 1, 0];
 
-    return new Model(gl, {
+    return new Model(this.context.device, {
       ...this.getShaders(),
       id: this.props.id,
+      bufferLayout: this.getAttributeManager()!.getBufferLayouts(),
       geometry: new Geometry({
-        drawMode: GL.TRIANGLE_STRIP,
+        topology: 'triangle-strip',
         attributes: {
-          positions: new Float32Array(positions)
+          positions: {size: 3, value: new Float32Array(positions)}
         }
       }),
       isInstanced: true

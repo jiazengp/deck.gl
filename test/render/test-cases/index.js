@@ -1,3 +1,7 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
 // core layers
 import coreLayersTests from './core-layers';
 import arcLayersTests from './arc-layer';
@@ -30,6 +34,7 @@ import viewsTests from './views';
 import effectsTests from './effects';
 import collisionFilterExtensionTests from './collision-filter-extension';
 import transitionTests from './transitions';
+import dataFilterExtensionTests from './data-filter-extension';
 
 export default [].concat(
   coreLayersTests,
@@ -56,8 +61,9 @@ export default [].concat(
   scenegraphLayerTests,
   viewsTests,
   effectsTests,
-  // TODO - Broken in headless mode with Chrome 113
-  // transitionTests,
-  terrainLayerTests,
-  collisionFilterExtensionTests
+  transitionTests,
+  collisionFilterExtensionTests,
+  dataFilterExtensionTests,
+  /* It is important to run this last for now - TerrainEffect once added cannot be removed */
+  terrainLayerTests
 );

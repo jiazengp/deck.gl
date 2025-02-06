@@ -1,3 +1,7 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
 import {deviation, extent, groupSort, median, variance} from 'd3-array';
 import {rgb} from 'd3-color';
 import {
@@ -14,16 +18,16 @@ import {format as d3Format} from 'd3-format';
 import moment from 'moment-timezone';
 
 import {Accessor, Layer, _ConstructorOf as ConstructorOf} from '@deck.gl/core';
-import {CPUGridLayer, HeatmapLayer, HexagonLayer} from '@deck.gl/aggregation-layers';
+import {GridLayer, HeatmapLayer, HexagonLayer} from '@deck.gl/aggregation-layers';
 import {GeoJsonLayer} from '@deck.gl/layers';
-import {H3HexagonLayer, MVTLayer} from '@deck.gl/geo-layers';
+import {H3HexagonLayer} from '@deck.gl/geo-layers';
 
-import CartoTileLayer from '../layers/carto-tile-layer';
+import ClusterTileLayer from '../layers/cluster-tile-layer';
 import H3TileLayer from '../layers/h3-tile-layer';
 import QuadbinTileLayer from '../layers/quadbin-tile-layer';
 import RasterTileLayer from '../layers/raster-tile-layer';
-import {MapType, TILE_FORMATS, TileFormat} from './maps-api-common';
-import {assert, createBinaryProxy} from '../utils';
+import VectorTileLayer from '../layers/vector-tile-layer';
+import {assert, createBinaryProxy, scaleIdentity} from '../utils';
 import {
   CustomMarkersRange,
   MapDataset,
@@ -32,6 +36,7 @@ import {
   VisualChannelField,
   VisualChannels
 } from './types';
+import HeatmapTileLayer from '../layers/heatmap-tile-layer';
 
 const SCALE_FUNCS = {
   linear: scaleLinear,
@@ -41,9 +46,21 @@ const SCALE_FUNCS = {
   quantile: scaleQuantile,
   quantize: scaleQuantize,
   sqrt: scaleSqrt,
-  custom: scaleThreshold
+  custom: scaleThreshold,
+  identity: scaleIdentity
 };
 export type SCALE_TYPE = keyof typeof SCALE_FUNCS;
+
+type TileLayerType =
+  | 'clusterTile'
+  | 'h3'
+  | 'heatmapTile'
+  | 'mvt'
+  | 'quadbin'
+  | 'raster'
+  | 'tileset';
+type DocumentLayerType = 'geojson' | 'grid' | 'heatmap' | 'hexagon' | 'hexagonId' | 'point';
+type LayerType = TileLayerType | DocumentLayerType;
 
 function identity<T>(v: T): T {
   return v;
@@ -71,6 +88,16 @@ const AGGREGATION_FUNC = {
   mode: (values, accessor) => groupSort(values, v => v.length, accessor).pop(),
   stddev: deviation,
   variance
+};
+
+const TILE_LAYER_TYPE_TO_LAYER: Record<TileLayerType, ConstructorOf<Layer>> = {
+  clusterTile: ClusterTileLayer,
+  h3: H3TileLayer,
+  heatmapTile: HeatmapTileLayer,
+  mvt: VectorTileLayer,
+  quadbin: QuadbinTileLayer,
+  raster: RasterTileLayer,
+  tileset: VectorTileLayer
 };
 
 const hexToRGBA = c => {
@@ -113,6 +140,13 @@ const customMarkersPropsMap = {
   }
 };
 
+const heatmapTilePropsMap = {
+  visConfig: {
+    colorRange: x => ({colorRange: x.colors.map(hexToRGBA)}),
+    radius: 'radiusPixels'
+  }
+};
+
 const aggregationVisConfig = {
   colorAggregation: x => ({colorAggregation: AGGREGATION[x] || AGGREGATION.sum}),
   colorRange: x => ({colorRange: x.colors.map(hexToRGBA)}),
@@ -134,17 +168,20 @@ function mergePropMaps(a: Record<string, any> = {}, b: Record<string, any> = {})
 }
 
 export function getLayer(
-  type: string,
+  type: LayerType,
   config: MapTextSubLayerConfig,
   dataset: MapDataset
 ): {Layer: ConstructorOf<Layer>; propMap: any; defaultProps: any} {
   let basePropMap: any = sharedPropMap;
 
   if (config.visConfig?.customMarkers) {
-    basePropMap = mergePropMaps(sharedPropMap, customMarkersPropsMap);
+    basePropMap = mergePropMaps(basePropMap, customMarkersPropsMap);
   }
-  if (type === 'mvt' || type === 'tileset' || type === 'h3' || type === 'quadbin') {
-    return getTileLayer(dataset, basePropMap);
+  if (type === 'heatmapTile') {
+    basePropMap = mergePropMaps(basePropMap, heatmapTilePropsMap);
+  }
+  if (TILE_LAYER_TYPE_TO_LAYER[type]) {
+    return getTileLayer(dataset, basePropMap, type);
   }
 
   const geoColumn = dataset?.geoColumn;
@@ -153,14 +190,14 @@ export function getLayer(
   const hexagonId = config.columns?.hex_id;
 
   const layerTypeDefs: Record<
-    string,
+    DocumentLayerType,
     {Layer: ConstructorOf<Layer>; propMap?: any; defaultProps?: any}
   > = {
     point: {
       Layer: GeoJsonLayer,
       propMap: {
         columns: {
-          altitude: x => ({parameters: {depthTest: Boolean(x)}})
+          altitude: x => ({parameters: {depthWriteEnabled: Boolean(x)}})
         },
         visConfig: {outline: 'stroked'}
       }
@@ -169,7 +206,7 @@ export function getLayer(
       Layer: GeoJsonLayer
     },
     grid: {
-      Layer: CPUGridLayer,
+      Layer: GridLayer,
       propMap: {visConfig: {...aggregationVisConfig, worldUnitSize: x => ({cellSize: 1000 * x})}},
       defaultProps: {getPosition}
     },
@@ -200,48 +237,16 @@ export function getLayer(
   };
 }
 
-export function layerFromTileDataset(
-  formatTiles: TileFormat | null = TILE_FORMATS.MVT,
-  scheme: string,
-  type?: MapType
-): typeof CartoTileLayer | typeof H3TileLayer | typeof MVTLayer | typeof QuadbinTileLayer {
-  if (type === 'raster') {
-    return RasterTileLayer;
-  }
-  if (scheme === 'h3') {
-    return H3TileLayer;
-  }
-  if (scheme === 'quadbin') {
-    return QuadbinTileLayer;
-  }
-  if (formatTiles === 'mvt') {
-    return MVTLayer;
-  }
-
-  // formatTiles === BINARY|JSON|GEOJSON
-  return CartoTileLayer;
-}
-
-function getTileLayer(dataset: MapDataset, basePropMap) {
-  const {
-    aggregationExp,
-    aggregationResLevel,
-    data: {
-      scheme,
-      tiles: [tileUrl]
-    }
-  } = dataset;
-  /* global URL */
-  const formatTiles = new URL(tileUrl).searchParams.get('formatTiles') as TileFormat;
+function getTileLayer(dataset: MapDataset, basePropMap, type: LayerType) {
+  const {aggregationExp, aggregationResLevel} = dataset;
 
   return {
-    Layer: layerFromTileDataset(formatTiles, scheme),
+    Layer: TILE_LAYER_TYPE_TO_LAYER[type] || VectorTileLayer,
     propMap: basePropMap,
     defaultProps: {
       ...defaultProps,
       ...(aggregationExp && {aggregationExp}),
       ...(aggregationResLevel && {aggregationResLevel}),
-      formatTiles,
       uniqueIdProperty: 'geoid'
     }
   };
@@ -253,7 +258,9 @@ function domainFromAttribute(attribute, scaleType: SCALE_TYPE, scaleLength: numb
   }
 
   if (scaleType === 'quantile' && attribute.quantiles) {
-    return attribute.quantiles[scaleLength];
+    return attribute.quantiles.global
+      ? attribute.quantiles.global[scaleLength]
+      : attribute.quantiles[scaleLength];
   }
 
   let {min} = attribute;
@@ -317,7 +324,7 @@ export function opacityToAlpha(opacity?: number) {
   return opacity !== undefined ? Math.round(255 * Math.pow(opacity, 1 / 2.2)) : 255;
 }
 
-function getAccessorKeys(name: string, aggregation: string | undefined): string[] {
+function getAccessorKeys(name: string, aggregation?: string | undefined): string[] {
   let keys = [name];
   if (aggregation) {
     // Snowflake will capitalized the keys, need to check lower and upper case version
@@ -343,33 +350,13 @@ export function getColorValueAccessor({name}, colorAggregation, data: any) {
 }
 
 export function getColorAccessor(
-  {name},
+  {name, colorColumn}: VisualChannelField,
   scaleType: SCALE_TYPE,
-  {aggregation, range: {colors, colorMap}},
+  {aggregation, range},
   opacity: number | undefined,
   data: any
 ) {
-  const scale = SCALE_FUNCS[scaleType as any]();
-  let domain: (string | number)[] = [];
-  let scaleColor: string[] = [];
-
-  if (Array.isArray(colorMap)) {
-    colorMap.forEach(([value, color]) => {
-      domain.push(value);
-      scaleColor.push(color);
-    });
-  } else {
-    domain = calculateDomain(data, name, scaleType, colors.length);
-    scaleColor = colors;
-  }
-
-  if (scaleType === 'ordinal') {
-    domain = domain.slice(0, scaleColor.length);
-  }
-
-  scale.domain(domain);
-  scale.range(scaleColor);
-  scale.unknown(UNKNOWN_COLOR);
+  const scale = calculateLayerScale(colorColumn || name, scaleType, range, data);
   const alpha = opacityToAlpha(opacity);
 
   let accessorKeys = getAccessorKeys(name, aggregation);
@@ -382,6 +369,36 @@ export function getColorAccessor(
     return [r, g, b, propertyValue === null ? 0 : alpha];
   };
   return normalizeAccessor(accessor, data);
+}
+
+function calculateLayerScale(name, scaleType, range, data) {
+  const scale = SCALE_FUNCS[scaleType]();
+  let domain: (string | number)[] = [];
+  let scaleColor: string[] = [];
+
+  if (scaleType !== 'identity') {
+    const {colorMap, colors} = range;
+
+    if (Array.isArray(colorMap)) {
+      colorMap.forEach(([value, color]) => {
+        domain.push(value);
+        scaleColor.push(color);
+      });
+    } else {
+      domain = calculateDomain(data, name, scaleType, colors.length);
+      scaleColor = colors;
+    }
+
+    if (scaleType === 'ordinal') {
+      domain = domain.slice(0, scaleColor.length);
+    }
+  }
+
+  scale.domain(domain);
+  scale.range(scaleColor);
+  scale.unknown(UNKNOWN_COLOR);
+
+  return scale;
 }
 
 const FALLBACK_ICON =

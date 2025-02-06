@@ -1,45 +1,35 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
 /**
  * Re-exported luma.gl API in the pre-built bundle
- * Cherry-pick luma core exports that are relevant to deck
  */
+import {luma} from '@luma.gl/core';
+/* eslint-disable @typescript-eslint/unbound-method */
+export const {
+  stats,
+  registerDevices,
+  getSupportedAdapters,
+  getBestAvailableAdapter,
+  setDefaultDeviceProps,
+  attachDevice,
+  createDevice,
+  enforceWebGL2
+} = luma;
+export {Device, Buffer, Texture, Framebuffer} from '@luma.gl/core';
 export {
-  // Core classes
   Model,
-  Transform,
-  ProgramManager,
-  Timeline,
-  // Context utilities
-  instrumentGLContext,
-  isWebGL2,
-  FEATURES,
-  hasFeatures,
-  getParameters,
-  setParameters,
-  withParameters,
-  cssToDeviceRatio,
-  // Copy and blit
-  // These are needed by submodules and rely on using the same copy
-  // of Texture2D & Framebuffer
-  readPixelsToBuffer,
-  copyToTexture,
-  cloneTextureFrom,
-  // WebGL1 classes
-  Buffer,
-  Program,
-  Framebuffer,
-  Renderbuffer,
-  Texture2D,
-  TextureCube,
-  // WebGL2 classes
-  Texture3D,
-  TransformFeedback,
-  // Geometries
+  BufferTransform,
+  TextureTransform,
+
+  // Geometry
   Geometry,
-  ConeGeometry,
   CubeGeometry,
-  CylinderGeometry,
-  IcoSphereGeometry,
-  PlaneGeometry,
   SphereGeometry,
-  TruncatedConeGeometry
-} from '@luma.gl/core';
+
+  // Scenegraph
+  ScenegraphNode,
+  GroupNode,
+  ModelNode
+} from '@luma.gl/engine';

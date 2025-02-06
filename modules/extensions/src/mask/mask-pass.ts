@@ -1,59 +1,76 @@
-import {Framebuffer, Texture2D, withParameters} from '@luma.gl/core';
-import {_LayersPass as LayersPass, LayersPassRenderOptions} from '@deck.gl/core';
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
+import type {
+  Device,
+  Framebuffer,
+  Parameters,
+  RenderPipelineParameters,
+  Texture
+} from '@luma.gl/core';
+import {Layer, _LayersPass as LayersPass, LayersPassRenderOptions, Viewport} from '@deck.gl/core';
 
 type MaskPassRenderOptions = LayersPassRenderOptions & {
   /** The channel to render into, 0:red, 1:green, 2:blue, 3:alpha */
-  channel: number;
+  channel: 0 | 1 | 2 | 3;
+};
+
+const MASK_BLENDING: RenderPipelineParameters = {
+  blendColorOperation: 'subtract',
+  blendColorSrcFactor: 'zero',
+  blendColorDstFactor: 'one',
+  blendAlphaOperation: 'subtract',
+  blendAlphaSrcFactor: 'zero',
+  blendAlphaDstFactor: 'one'
 };
 
 export default class MaskPass extends LayersPass {
-  maskMap: Texture2D;
+  maskMap: Texture;
   fbo: Framebuffer;
 
-  constructor(gl, props: {id: string; mapSize?: number}) {
-    super(gl, props);
+  constructor(device: Device, props: {id: string; mapSize?: number}) {
+    super(device, props);
 
     const {mapSize = 2048} = props;
 
-    this.maskMap = new Texture2D(gl, {
+    this.maskMap = device.createTexture({
+      format: 'rgba8unorm',
       width: mapSize,
       height: mapSize,
-      parameters: {
-        [gl.TEXTURE_MIN_FILTER]: gl.LINEAR,
-        [gl.TEXTURE_MAG_FILTER]: gl.LINEAR,
-        [gl.TEXTURE_WRAP_S]: gl.CLAMP_TO_EDGE,
-        [gl.TEXTURE_WRAP_T]: gl.CLAMP_TO_EDGE
+      sampler: {
+        minFilter: 'linear',
+        magFilter: 'linear',
+        addressModeU: 'clamp-to-edge',
+        addressModeV: 'clamp-to-edge'
       }
     });
 
-    this.fbo = new Framebuffer(gl, {
+    this.fbo = device.createFramebuffer({
       id: 'maskmap',
       width: mapSize,
       height: mapSize,
-      attachments: {
-        [gl.COLOR_ATTACHMENT0]: this.maskMap
-      }
+      colorAttachments: [this.maskMap]
     });
   }
 
   render(options: MaskPassRenderOptions) {
-    const gl = this.gl;
+    const colorMask = 2 ** options.channel;
+    const clearColor = [255, 255, 255, 255];
+    super.render({...options, clearColor, colorMask, target: this.fbo, pass: 'mask'});
+  }
 
-    const colorMask = [false, false, false, false];
-    colorMask[options.channel] = true;
-
-    return withParameters(
-      gl,
-      {
-        clearColor: [255, 255, 255, 255],
-        blend: true,
-        blendFunc: [gl.ZERO, gl.ONE],
-        blendEquation: gl.FUNC_SUBTRACT,
-        colorMask,
-        depthTest: false
-      },
-      () => super.render({...options, target: this.fbo, pass: 'mask'})
-    );
+  protected getLayerParameters(
+    layer: Layer<{}>,
+    layerIndex: number,
+    viewport: Viewport
+  ): Parameters {
+    return {
+      ...layer.props.parameters,
+      blend: true,
+      depthCompare: 'always',
+      ...MASK_BLENDING
+    };
   }
 
   shouldDrawLayer(layer) {

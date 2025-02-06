@@ -1,3 +1,7 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
 import {CompositeLayer, Layer, LayersList, DefaultProps} from '@deck.gl/core';
 import {PolygonLayer, PolygonLayerProps} from '@deck.gl/layers';
 
@@ -6,7 +10,7 @@ const defaultProps: DefaultProps<GeoCellLayerProps> = {
 };
 
 /** All properties supported by GeoCellLayer. */
-export type GeoCellLayerProps<DataT = any> = PolygonLayerProps<DataT>;
+export type GeoCellLayerProps<DataT = unknown> = PolygonLayerProps<DataT>;
 
 export default class GeoCellLayer<DataT = any, ExtraProps extends {} = {}> extends CompositeLayer<
   Required<GeoCellLayerProps<DataT>> & ExtraProps

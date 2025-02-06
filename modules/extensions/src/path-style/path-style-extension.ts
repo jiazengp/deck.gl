@@ -1,34 +1,24 @@
-// Copyright (c) 2015 - 2017 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
 
 import {LayerExtension, _mergeShaders as mergeShaders} from '@deck.gl/core';
+import {vec3} from '@math.gl/core';
 import {dashShaders, offsetShaders} from './shaders.glsl';
-import {dist} from 'gl-matrix/vec3';
 
 import type {Layer, LayerContext, Accessor, UpdateParameters} from '@deck.gl/core';
+import type {ShaderModule} from '@luma.gl/shadertools';
 
 const defaultProps = {
   getDashArray: {type: 'accessor', value: [0, 0]},
   getOffset: {type: 'accessor', value: 0},
   dashJustified: false,
   dashGapPickable: false
+};
+
+type PathStyleProps = {
+  dashAlignMode: number;
+  dashGapPickable: boolean;
 };
 
 export type PathStyleExtensionProps<DataT = any> = {
@@ -55,7 +45,7 @@ export type PathStyleExtensionProps<DataT = any> = {
   dashGapPickable?: boolean;
 };
 
-type PathStyleExtensionOptions = {
+export type PathStyleExtensionOptions = {
   /**
    * Add capability to render dashed lines.
    * @default false
@@ -96,7 +86,7 @@ export default class PathStyleExtension extends LayerExtension<PathStyleExtensio
     }
 
     // Merge shader injection
-    let result = {};
+    let result = {} as {inject: Record<string, string>};
     if (extension.opts.dash) {
       result = mergeShaders(result, dashShaders);
     }
@@ -104,7 +94,18 @@ export default class PathStyleExtension extends LayerExtension<PathStyleExtensio
       result = mergeShaders(result, offsetShaders);
     }
 
-    return result;
+    const {inject} = result;
+    const pathStyle: ShaderModule<PathStyleProps> = {
+      name: 'pathStyle',
+      inject,
+      uniformTypes: {
+        dashAlignMode: 'f32',
+        dashGapPickable: 'i32'
+      }
+    };
+    return {
+      modules: [pathStyle]
+    };
   }
 
   initializeState(this: Layer<PathStyleExtensionProps>, context: LayerContext, extension: this) {
@@ -116,16 +117,20 @@ export default class PathStyleExtension extends LayerExtension<PathStyleExtensio
 
     if (extension.opts.dash) {
       attributeManager.addInstanced({
-        instanceDashArrays: {size: 2, accessor: 'getDashArray'}
-      });
-    }
-    if (extension.opts.highPrecisionDash) {
-      attributeManager.addInstanced({
-        instanceDashOffsets: {
-          size: 1,
-          accessor: 'getPath',
-          transform: extension.getDashOffsets.bind(this)
-        }
+        instanceDashArrays: {size: 2, accessor: 'getDashArray'},
+        instanceDashOffsets: extension.opts.highPrecisionDash
+          ? {
+              size: 1,
+              accessor: 'getPath',
+              transform: extension.getDashOffsets.bind(this)
+            }
+          : {
+              size: 1,
+              update: attribute => {
+                attribute.constant = true;
+                attribute.value = [0];
+              }
+            }
       });
     }
     if (extension.opts.offset) {
@@ -144,14 +149,13 @@ export default class PathStyleExtension extends LayerExtension<PathStyleExtensio
       return;
     }
 
-    const uniforms: any = {};
-
     if (extension.opts.dash) {
-      uniforms.dashAlignMode = this.props.dashJustified ? 1 : 0;
-      uniforms.dashGapPickable = Boolean(this.props.dashGapPickable);
+      const pathStyleProps: PathStyleProps = {
+        dashAlignMode: this.props.dashJustified ? 1 : 0,
+        dashGapPickable: Boolean(this.props.dashGapPickable)
+      };
+      this.setShaderModuleProps({pathStyle: pathStyleProps});
     }
-
-    this.state.model.setUniforms(uniforms);
   }
 
   getDashOffsets(this: Layer<PathStyleExtensionProps>, path: number[] | number[][]): number[] {
@@ -167,11 +171,12 @@ export default class PathStyleExtension extends LayerExtension<PathStyleExtensio
       p = this.projectPosition(p);
 
       if (i > 0) {
-        result[i] = result[i - 1] + dist(prevP, p);
+        result[i] = result[i - 1] + vec3.dist(prevP, p);
       }
 
       prevP = p;
     }
+    result[geometrySize - 1] = 0;
     return result;
   }
 }

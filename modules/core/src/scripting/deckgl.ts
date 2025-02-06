@@ -1,11 +1,14 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
 /* global window, document */
 /* eslint-disable max-statements, import/no-extraneous-dependencies */
-
-// react-map-gl is NOT a dependency of this package
-// This class is only supposed to be used via the pre-built bundle
-import Mapbox from 'react-map-gl/dist/esm/mapbox/mapbox';
+import {MapWrapper} from './map-wrapper';
 
 import Deck, {DeckProps} from '../lib/deck';
+import type WebMercatorViewport from '../viewports/web-mercator-viewport';
+import type {MapViewState} from '../views/map-view';
 
 const CANVAS_STYLE = {
   position: 'absolute',
@@ -48,7 +51,13 @@ type DeckGLProps = DeckProps & {
   /** DOM element to add deck.gl canvas to */
   container?: Element;
   /** base map library, mapboxgl or maplibregl */
-  map?: object;
+  map?: any;
+  /** URL to base map style JSON, see Mapbox/Maplibre documentation */
+  mapStyle?: string;
+  /** Access token if using Mapbox */
+  mapboxApiAccessToken?: string;
+  /** Directly passed to Map class constructor */
+  mapOptions?: any;
 };
 
 /**
@@ -59,7 +68,7 @@ type DeckGLProps = DeckProps & {
  */
 export default class DeckGL extends Deck {
   /** Base map instance */
-  private _map: any;
+  private _map: MapWrapper | false;
 
   constructor(props: DeckGLProps) {
     if (typeof document === 'undefined') {
@@ -69,22 +78,23 @@ export default class DeckGL extends Deck {
 
     const {mapCanvas, deckCanvas} = createCanvas(props);
 
-    const viewState = props.viewState || props.initialViewState;
+    const viewState = (props.viewState || props.initialViewState) as MapViewState;
     const isMap = Number.isFinite(viewState && viewState.latitude);
     const {map = globalThis.mapboxgl || globalThis.maplibregl} = props;
 
     super({canvas: deckCanvas, ...props});
 
-    // @ts-expect-error map lib is not typed
     if (map && map.Map) {
       // Default create mapbox map
       this._map =
         isMap &&
-        new Mapbox({
+        new MapWrapper({
           ...props,
+          width: 0,
+          height: 0,
           viewState,
           container: mapCanvas,
-          mapboxgl: map
+          mapLib: map
         });
     } else {
       this._map = map;
@@ -105,7 +115,7 @@ export default class DeckGL extends Deck {
 
   setProps(props) {
     if ('mapStyle' in props && this._map) {
-      this._map._map.setStyle(props.mapStyle);
+      this._map.setProps({mapStyle: props.mapStyle});
     }
 
     super.setProps(props);
@@ -114,12 +124,14 @@ export default class DeckGL extends Deck {
   _drawLayers(redrawReason: string, options: any) {
     // Update the base map
     if (this._map) {
-      const viewport = this.getViewports()[0];
-      this._map.setProps({
-        width: viewport.width,
-        height: viewport.height,
-        viewState: viewport
-      });
+      const viewport = this.getViewports()[0] as WebMercatorViewport;
+      if (viewport) {
+        this._map.setProps({
+          width: viewport.width,
+          height: viewport.height,
+          viewState: viewport
+        });
+      }
     }
     super._drawLayers(redrawReason, options);
   }

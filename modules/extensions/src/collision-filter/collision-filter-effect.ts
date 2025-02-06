@@ -1,15 +1,17 @@
-import {Framebuffer, Renderbuffer, Texture2D, cssToDeviceRatio} from '@luma.gl/core';
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
+import {Device, Framebuffer, Texture} from '@luma.gl/core';
 import {equals} from '@math.gl/core';
 import {_deepEqual as deepEqual} from '@deck.gl/core';
-import type {Effect, Layer, PreRenderOptions, Viewport} from '@deck.gl/core';
+import type {Effect, EffectContext, Layer, PreRenderOptions, Viewport} from '@deck.gl/core';
 import CollisionFilterPass from './collision-filter-pass';
-import MaskEffect, {MaskPreRenderStats} from '../mask/mask-effect';
+import {MaskPreRenderStats} from '../mask/mask-effect';
 // import {debugFBO} from '../utils/debug';
 
-type CollisionFilterExtensionProps = {
-  collisionTestProps?: {};
-  collisionGroup: string;
-};
+import type {CollisionFilterExtensionProps} from './collision-filter-extension';
+import type {CollisionModuleProps} from './shader-module';
 
 // Factor by which to downscale Collision FBO relative to canvas
 const DOWNSCALE = 2;
@@ -27,28 +29,32 @@ export default class CollisionFilterEffect implements Effect {
   useInPicking = true;
   order = 1;
 
+  private context?: EffectContext;
   private channels: Record<string, RenderInfo> = {};
   private collisionFilterPass?: CollisionFilterPass;
   private collisionFBOs: Record<string, Framebuffer> = {};
-  private dummyCollisionMap?: Texture2D;
+  private dummyCollisionMap?: Texture;
   private lastViewport?: Viewport;
 
-  preRender(
-    gl: WebGLRenderingContext,
-    {
-      effects: allEffects,
-      layers,
-      layerFilter,
-      viewports,
-      onViewportActive,
-      views,
-      isPicking,
-      preRenderStats = {}
-    }: PreRenderOptions
-  ): void {
-    if (!this.dummyCollisionMap) {
-      this.dummyCollisionMap = new Texture2D(gl, {width: 1, height: 1});
-    }
+  setup(context: EffectContext) {
+    this.context = context;
+    const {device} = context;
+    this.dummyCollisionMap = device.createTexture({width: 1, height: 1});
+    this.collisionFilterPass = new CollisionFilterPass(device, {id: 'default-collision-filter'});
+  }
+
+  preRender({
+    effects: allEffects,
+    layers,
+    layerFilter,
+    viewports,
+    onViewportActive,
+    views,
+    isPicking,
+    preRenderStats = {}
+  }: PreRenderOptions): void {
+    // This can only be called in preRender() after setup() where context is populated
+    const {device} = this.context!;
 
     if (isPicking) {
       // Do not update on picking pass
@@ -64,16 +70,12 @@ export default class CollisionFilterEffect implements Effect {
       return;
     }
 
-    if (!this.collisionFilterPass) {
-      this.collisionFilterPass = new CollisionFilterPass(gl, {id: 'default-collision-filter'});
-    }
-
     // Detect if mask has rendered. TODO: better dependency system for Effects
-    const effects = allEffects?.filter(e => e.constructor === MaskEffect);
+    const effects = allEffects?.filter(e => e.useInPicking && preRenderStats[e.id]);
     const maskEffectRendered = (preRenderStats['mask-effect'] as MaskPreRenderStats)?.didRender;
 
     // Collect layers to render
-    const channels = this._groupByCollisionGroup(gl, collisionLayers);
+    const channels = this._groupByCollisionGroup(device, collisionLayers);
 
     const viewport = viewports[0];
     const viewportChanged =
@@ -83,9 +85,11 @@ export default class CollisionFilterEffect implements Effect {
     for (const collisionGroup in channels) {
       const collisionFBO = this.collisionFBOs[collisionGroup];
       const renderInfo = channels[collisionGroup];
+      // @ts-expect-error TODO - assuming WebGL context
+      const [width, height] = device.canvasContext.getPixelSize();
       collisionFBO.resize({
-        width: gl.canvas.width / DOWNSCALE,
-        height: gl.canvas.height / DOWNSCALE
+        width: width / DOWNSCALE,
+        height: height / DOWNSCALE
       });
       this._render(renderInfo, {
         effects,
@@ -153,10 +157,16 @@ export default class CollisionFilterEffect implements Effect {
         viewports: viewport ? [viewport] : [],
         onViewportActive,
         views,
-        moduleParameters: {
-          // To avoid feedback loop forming between Framebuffer and active Texture.
-          dummyCollisionMap: this.dummyCollisionMap,
-          devicePixelRatio: cssToDeviceRatio(collisionFBO.gl) / DOWNSCALE
+        shaderModuleProps: {
+          collision: {
+            enabled: true,
+            // To avoid feedback loop forming between Framebuffer and active Texture.
+            dummyCollisionMap: this.dummyCollisionMap
+          },
+          project: {
+            // @ts-expect-error TODO - assuming WebGL context
+            devicePixelRatio: collisionFBO.device.canvasContext.getDevicePixelRatio() / DOWNSCALE
+          }
         }
       });
     }
@@ -167,12 +177,12 @@ export default class CollisionFilterEffect implements Effect {
    * Returns a map from collisionGroup to render info
    */
   private _groupByCollisionGroup(
-    gl: WebGLRenderingContext,
+    device: Device,
     collisionLayers: Layer<CollisionFilterExtensionProps>[]
   ): Record<string, RenderInfo> {
     const channelMap = {};
     for (const layer of collisionLayers) {
-      const {collisionGroup} = layer.props;
+      const collisionGroup = layer.props.collisionGroup!;
       let channelInfo = channelMap[collisionGroup];
       if (!channelInfo) {
         channelInfo = {collisionGroup, layers: [], layerBounds: [], allLayersLoaded: true};
@@ -188,7 +198,7 @@ export default class CollisionFilterEffect implements Effect {
     // Create any new passes and remove any old ones
     for (const collisionGroup of Object.keys(channelMap)) {
       if (!this.collisionFBOs[collisionGroup]) {
-        this.createFBO(gl, collisionGroup);
+        this.createFBO(device, collisionGroup);
       }
       if (!this.channels[collisionGroup]) {
         this.channels[collisionGroup] = channelMap[collisionGroup];
@@ -203,13 +213,21 @@ export default class CollisionFilterEffect implements Effect {
     return channelMap;
   }
 
-  getModuleParameters(layer: Layer): {
-    collisionFBO: Framebuffer;
-    dummyCollisionMap: Texture2D;
+  getShaderModuleProps(layer: Layer): {
+    collision: CollisionModuleProps;
   } {
-    const {collisionGroup} = (layer as Layer<CollisionFilterExtensionProps>).props;
+    const {collisionGroup, collisionEnabled} = (layer as Layer<CollisionFilterExtensionProps>)
+      .props;
     const {collisionFBOs, dummyCollisionMap} = this;
-    return {collisionFBO: collisionFBOs[collisionGroup], dummyCollisionMap};
+    const collisionFBO = collisionFBOs[collisionGroup!];
+    const enabled = collisionEnabled && Boolean(collisionFBO);
+    return {
+      collision: {
+        enabled,
+        collisionFBO,
+        dummyCollisionMap: dummyCollisionMap!
+      }
+    };
   }
 
   cleanup(): void {
@@ -225,37 +243,42 @@ export default class CollisionFilterEffect implements Effect {
     this.lastViewport = undefined;
   }
 
-  createFBO(gl: WebGLRenderingContext, collisionGroup: string) {
-    const {width, height} = gl.canvas;
-    const collisionMap = new Texture2D(gl, {
+  createFBO(device: Device, collisionGroup: string) {
+    // @ts-expect-error
+    const {width, height} = device.gl.canvas;
+    const collisionMap = device.createTexture({
+      format: 'rgba8unorm',
       width,
       height,
-      parameters: {
-        [gl.TEXTURE_MIN_FILTER]: gl.NEAREST,
-        [gl.TEXTURE_MAG_FILTER]: gl.NEAREST,
-        [gl.TEXTURE_WRAP_S]: gl.CLAMP_TO_EDGE,
-        [gl.TEXTURE_WRAP_T]: gl.CLAMP_TO_EDGE
+      sampler: {
+        minFilter: 'nearest',
+        magFilter: 'nearest',
+        addressModeU: 'clamp-to-edge',
+        addressModeV: 'clamp-to-edge'
       }
     });
 
-    const depthBuffer = new Renderbuffer(gl, {format: gl.DEPTH_COMPONENT16, width, height});
-    this.collisionFBOs[collisionGroup] = new Framebuffer(gl, {
-      id: `Collision-${collisionGroup}`,
+    // @ts-ignore
+    const depthStencilAttachment = device.createTexture({
+      format: 'depth16unorm',
       width,
       height,
-      attachments: {
-        [gl.COLOR_ATTACHMENT0]: collisionMap,
-        [gl.DEPTH_ATTACHMENT]: depthBuffer
-      }
+      mipmaps: false
+    });
+    this.collisionFBOs[collisionGroup] = device.createFramebuffer({
+      id: `collision-${collisionGroup}`,
+      width,
+      height,
+      colorAttachments: [collisionMap],
+      depthStencilAttachment
     });
   }
 
   destroyFBO(collisionGroup: string) {
     const fbo = this.collisionFBOs[collisionGroup];
-    for (const attachment of Object.values(fbo.attachments as Texture2D[])) {
-      attachment.delete();
-    }
-    fbo.delete();
+    fbo.colorAttachments[0]?.destroy();
+    fbo.depthStencilAttachment?.destroy();
+    fbo.destroy();
     delete this.collisionFBOs[collisionGroup];
   }
 }

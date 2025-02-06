@@ -1,17 +1,23 @@
-import GL from '@luma.gl/constants';
-import Pass from './pass';
-import {clear, setParameters, withParameters, cssToDeviceRatio} from '@luma.gl/core';
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
 
-import type {Framebuffer} from '@luma.gl/core';
+import type {Device, Parameters, RenderPassParameters} from '@luma.gl/core';
+import type {Framebuffer, RenderPass} from '@luma.gl/core';
+
+import Pass from './pass';
 import type Viewport from '../viewports/viewport';
 import type View from '../views/view';
 import type Layer from '../lib/layer';
 import type {Effect} from '../lib/effect';
+import type {ProjectProps} from '../shaderlib/project/viewport-uniforms';
+import type {PickingProps} from '@luma.gl/shadertools';
 
 export type Rect = {x: number; y: number; width: number; height: number};
 
 export type LayersPassRenderOptions = {
-  target?: Framebuffer;
+  /** @deprecated TODO v9 recommend we rename this to framebuffer to minimize confusion */
+  target?: Framebuffer | null;
   isPicking?: boolean;
   pass: string;
   layers: Layer[];
@@ -23,17 +29,20 @@ export type LayersPassRenderOptions = {
   /** If true, recalculates render index (z) from 0. Set to false if a stack of layers are rendered in multiple passes. */
   clearStack?: boolean;
   clearCanvas?: boolean;
+  clearColor?: number[];
+  colorMask?: number;
+  scissorRect?: number[];
   layerFilter?: ((context: FilterContext) => boolean) | null;
-  moduleParameters?: any;
+  shaderModuleProps?: any;
   /** Stores returned results from Effect.preRender, for use downstream in the render pipeline */
   preRenderStats?: Record<string, any>;
 };
 
-type DrawLayerParameters = {
+export type DrawLayerParameters = {
   shouldDrawLayer: boolean;
-  layerRenderIndex?: number;
-  moduleParameters?: any;
-  layerParameters?: any;
+  layerRenderIndex: number;
+  shaderModuleProps: any;
+  layerParameters: Parameters;
 };
 
 export type FilterContext = {
@@ -51,33 +60,55 @@ export type RenderStats = {
   pickableCount: number;
 };
 
+/** A Pass that renders all layers */
 export default class LayersPass extends Pass {
   _lastRenderIndex: number = -1;
 
   render(options: LayersPassRenderOptions): any {
-    const gl = this.gl;
+    // @ts-expect-error TODO - assuming WebGL context
+    const [width, height] = this.device.canvasContext.getDrawingBufferSize();
 
-    setParameters(gl, {framebuffer: options.target});
-    return this._drawLayers(options);
+    // Explicitly specify clearColor and clearDepth, overriding render pass defaults.
+    const clearCanvas = options.clearCanvas ?? true;
+    const clearColor = options.clearColor ?? (clearCanvas ? [0, 0, 0, 0] : false);
+    const clearDepth = clearCanvas ? 1 : false;
+    const clearStencil = clearCanvas ? 0 : false;
+    const colorMask = options.colorMask ?? 0xf;
+
+    const parameters: RenderPassParameters = {viewport: [0, 0, width, height]};
+    if (options.colorMask) {
+      parameters.colorMask = colorMask;
+    }
+    if (options.scissorRect) {
+      parameters.scissorRect = options.scissorRect as [number, number, number, number];
+    }
+
+    const renderPass = this.device.beginRenderPass({
+      framebuffer: options.target,
+      parameters,
+      clearColor: clearColor as [number, number, number, number],
+      clearDepth,
+      clearStencil
+    });
+
+    try {
+      return this._drawLayers(renderPass, options);
+    } finally {
+      renderPass.end();
+    }
   }
 
-  // Draw a list of layers in a list of viewports
-  private _drawLayers(options: LayersPassRenderOptions) {
+  /** Draw a list of layers in a list of viewports */
+  private _drawLayers(renderPass: RenderPass, options: LayersPassRenderOptions) {
     const {
       target,
-      moduleParameters,
+      shaderModuleProps,
       viewports,
       views,
       onViewportActive,
-      clearStack = true,
-      clearCanvas = true
+      clearStack = true
     } = options;
     options.pass = options.pass || 'unknown';
-
-    const gl = this.gl;
-    if (clearCanvas) {
-      clearGLCanvas(gl, target);
-    }
 
     if (clearStack) {
       this._lastRenderIndex = -1;
@@ -97,10 +128,10 @@ export default class LayersPass extends Pass {
       const subViewports = viewport.subViewports || [viewport];
       for (const subViewport of subViewports) {
         const stats = this._drawLayersInViewport(
-          gl,
+          renderPass,
           {
             target,
-            moduleParameters,
+            shaderModuleProps,
             viewport: subViewport,
             view,
             pass: options.pass,
@@ -126,7 +157,7 @@ export default class LayersPass extends Pass {
       layerFilter,
       cullRect,
       effects,
-      moduleParameters
+      shaderModuleProps
     }: LayersPassRenderOptions,
     /** Internal flag, true if only used to determine whether each layer should be drawn */
     evaluateShouldDrawOnly: boolean = false
@@ -151,24 +182,28 @@ export default class LayersPass extends Pass {
         layerFilterCache
       );
 
-      const layerParam: DrawLayerParameters = {
-        shouldDrawLayer
-      };
+      const layerParam = {shouldDrawLayer} as DrawLayerParameters;
 
       if (shouldDrawLayer && !evaluateShouldDrawOnly) {
+        layerParam.shouldDrawLayer = true;
+
         // This is the "logical" index for ordering this layer in the stack
         // used to calculate polygon offsets
         // It can be the same as another layer
         layerParam.layerRenderIndex = indexResolver(layer, shouldDrawLayer);
 
-        layerParam.moduleParameters = this._getModuleParameters(
+        layerParam.shaderModuleProps = this._getShaderModuleProps(
           layer,
           effects,
           pass,
-          moduleParameters
+          shaderModuleProps
         );
-        layerParam.layerParameters = this.getLayerParameters(layer, layerIndex, viewport);
+        layerParam.layerParameters = {
+          ...layer.context.deck?.props.parameters,
+          ...this.getLayerParameters(layer, layerIndex, viewport)
+        };
       }
+
       drawLayerParams[layerIndex] = layerParam;
     }
     return drawLayerParams;
@@ -179,26 +214,28 @@ export default class LayersPass extends Pass {
   // intersect with the picking rect
   /* eslint-disable max-depth, max-statements */
   private _drawLayersInViewport(
-    gl,
-    {layers, moduleParameters: globalModuleParameters, pass, target, viewport, view},
-    drawLayerParams
+    renderPass: RenderPass,
+    {layers, shaderModuleProps: globalModuleParameters, pass, target, viewport, view},
+    drawLayerParams: DrawLayerParameters[]
   ): RenderStats {
-    const glViewport = getGLViewport(gl, {
-      moduleParameters: globalModuleParameters,
+    const glViewport = getGLViewport(this.device, {
+      shaderModuleProps: globalModuleParameters,
       target,
       viewport
     });
 
     if (view && view.props.clear) {
       const clearOpts = view.props.clear === true ? {color: true, depth: true} : view.props.clear;
-      withParameters(
-        gl,
-        {
-          scissorTest: true,
-          scissor: glViewport
+      const clearRenderPass = this.device.beginRenderPass({
+        framebuffer: target,
+        parameters: {
+          viewport: glViewport,
+          scissorRect: glViewport
         },
-        () => clear(gl, clearOpts)
-      );
+        clearColor: clearOpts.color ? [0, 0, 0, 0] : false,
+        clearDepth: clearOpts.depth ? 1 : false
+      });
+      clearRenderPass.end();
     }
 
     // render layers in normal colors
@@ -209,13 +246,13 @@ export default class LayersPass extends Pass {
       pickableCount: 0
     };
 
-    setParameters(gl, {viewport: glViewport});
+    renderPass.setParameters({viewport: glViewport});
 
     // render layers in normal colors
     for (let layerIndex = 0; layerIndex < layers.length; layerIndex++) {
-      const layer = layers[layerIndex];
-      const {shouldDrawLayer, layerRenderIndex, moduleParameters, layerParameters} =
-        drawLayerParams[layerIndex];
+      const layer = layers[layerIndex] as Layer;
+      const drawLayerParameters = drawLayerParams[layerIndex];
+      const {shouldDrawLayer} = drawLayerParameters;
 
       // Calculate stats
       if (shouldDrawLayer && layer.props.pickable) {
@@ -223,23 +260,33 @@ export default class LayersPass extends Pass {
       }
       if (layer.isComposite) {
         renderStatus.compositeCount++;
-      } else if (shouldDrawLayer) {
+      }
+      if (layer.isDrawable && drawLayerParameters.shouldDrawLayer) {
+        const {layerRenderIndex, shaderModuleProps, layerParameters} = drawLayerParameters;
         // Draw the layer
         renderStatus.visibleCount++;
 
         this._lastRenderIndex = Math.max(this._lastRenderIndex, layerRenderIndex);
 
         // overwrite layer.context.viewport with the sub viewport
-        moduleParameters.viewport = viewport;
+        if (shaderModuleProps.project) {
+          shaderModuleProps.project.viewport = viewport;
+        }
+
+        // TODO v9 - we are sending renderPass both as a parameter and through the context.
+        // Long-term, it is likely better not to have user defined layer methods have to access
+        // the "global" layer context.
+        layer.context.renderPass = renderPass;
 
         try {
           layer._drawLayer({
-            moduleParameters,
+            renderPass,
+            shaderModuleProps,
             uniforms: {layerIndex: layerRenderIndex},
             parameters: layerParameters
           });
         } catch (err) {
-          layer.raiseError(err, `drawing ${layer} to ${pass}`);
+          layer.raiseError(err as Error, `drawing ${layer} to ${pass}`);
         }
       }
     }
@@ -253,11 +300,15 @@ export default class LayersPass extends Pass {
     return true;
   }
 
-  protected getModuleParameters(layer: Layer, effects?: Effect[]): any {
+  protected getShaderModuleProps(
+    layer: Layer,
+    effects: Effect[] | undefined,
+    otherShaderModuleProps: Record<string, any>
+  ): any {
     return null;
   }
 
-  protected getLayerParameters(layer: Layer, layerIndex: number, viewport: Viewport): any {
+  protected getLayerParameters(layer: Layer, layerIndex: number, viewport: Viewport): Parameters {
     return layer.props.parameters;
   }
 
@@ -276,14 +327,14 @@ export default class LayersPass extends Pass {
 
     drawContext.layer = layer;
 
-    let parent = layer.parent as Layer;
+    let parent = layer.parent;
     while (parent) {
       // @ts-ignore
       if (!parent.props.visible || !parent.filterSubLayer(drawContext)) {
         return false;
       }
       drawContext.layer = parent;
-      parent = parent.parent as Layer;
+      parent = parent.parent;
     }
 
     if (layerFilter) {
@@ -302,32 +353,45 @@ export default class LayersPass extends Pass {
     return true;
   }
 
-  private _getModuleParameters(
+  private _getShaderModuleProps(
     layer: Layer,
     effects: Effect[] | undefined,
     pass: string,
     overrides: any
   ): any {
-    const moduleParameters = Object.assign(
-      Object.create(layer.internalState?.propsInTransition || layer.props),
-      {
-        autoWrapLongitude: layer.wrapLongitude,
-        // @ts-ignore
+    // @ts-expect-error TODO - assuming WebGL context
+    const devicePixelRatio = this.device.canvasContext.cssToDeviceRatio();
+    const layerProps = layer.internalState?.propsInTransition || layer.props;
+
+    const shaderModuleProps = {
+      layer: layerProps,
+      picking: {
+        isActive: false
+      } satisfies PickingProps,
+      project: {
         viewport: layer.context.viewport,
-        // @ts-ignore
-        mousePosition: layer.context.mousePosition,
-        pickingActive: 0,
-        devicePixelRatio: cssToDeviceRatio(this.gl)
-      }
-    );
+        devicePixelRatio,
+        modelMatrix: layerProps.modelMatrix,
+        coordinateSystem: layerProps.coordinateSystem,
+        coordinateOrigin: layerProps.coordinateOrigin,
+        autoWrapLongitude: layer.wrapLongitude
+      } satisfies ProjectProps
+    };
 
     if (effects) {
       for (const effect of effects) {
-        Object.assign(moduleParameters, effect.getModuleParameters?.(layer));
+        mergeModuleParameters(
+          shaderModuleProps,
+          effect.getShaderModuleProps?.(layer, shaderModuleProps)
+        );
       }
     }
 
-    return Object.assign(moduleParameters, this.getModuleParameters(layer, effects), overrides);
+    return mergeModuleParameters(
+      shaderModuleProps,
+      this.getShaderModuleProps(layer, effects, shaderModuleProps),
+      overrides
+    );
   }
 }
 
@@ -381,23 +445,26 @@ export function layerIndexResolver(
 
 // Convert viewport top-left CSS coordinates to bottom up WebGL coordinates
 function getGLViewport(
-  gl,
+  device: Device,
   {
-    moduleParameters,
+    shaderModuleProps,
     target,
     viewport
   }: {
-    moduleParameters: any;
+    shaderModuleProps: any;
     target?: Framebuffer;
     viewport: Viewport;
   }
 ): [number, number, number, number] {
-  const useTarget = target && target.id !== 'default-framebuffer';
   const pixelRatio =
-    (moduleParameters && moduleParameters.devicePixelRatio) || cssToDeviceRatio(gl);
+    shaderModuleProps?.project?.devicePixelRatio ??
+    // @ts-expect-error TODO - assuming WebGL context
+    device.canvasContext.cssToDeviceRatio();
 
   // Default framebuffer is used when writing to canvas
-  const height = useTarget ? target.height : gl.drawingBufferHeight;
+  // @ts-expect-error TODO - assuming WebGL context
+  const [, drawingBufferHeight] = device.canvasContext.getDrawingBufferSize();
+  const height = target ? target.height : drawingBufferHeight;
 
   // Convert viewport top-left CSS coordinates to bottom up WebGL coordinates
   const dimensions = viewport;
@@ -409,10 +476,20 @@ function getGLViewport(
   ];
 }
 
-function clearGLCanvas(gl: WebGLRenderingContext, targetFramebuffer?: Framebuffer) {
-  const width = targetFramebuffer ? targetFramebuffer.width : gl.drawingBufferWidth;
-  const height = targetFramebuffer ? targetFramebuffer.height : gl.drawingBufferHeight;
-  // clear depth and color buffers, restoring transparency
-  setParameters(gl, {viewport: [0, 0, width, height]});
-  gl.clear(GL.COLOR_BUFFER_BIT | GL.DEPTH_BUFFER_BIT);
+function mergeModuleParameters(
+  target: Record<string, any>,
+  ...sources: Record<string, any>[]
+): Record<string, any> {
+  for (const source of sources) {
+    if (source) {
+      for (const key in source) {
+        if (target[key]) {
+          Object.assign(target[key], source[key]);
+        } else {
+          target[key] = source[key];
+        }
+      }
+    }
+  }
+  return target;
 }

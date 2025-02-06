@@ -1,6 +1,16 @@
 {
+  "ts-node": {
+    "include": [
+      "modules",
+      "test/modules"
+    ],
+    // It is faster to skip typechecking. Remove if you want ts-node to do typechecking.
+    "transpileOnly": true
+  },
   "compilerOptions": {
-    "target": "es2022",
+    "target": "es2020",
+    "module": "es2020",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
     "jsx": "react",
     "strict": true,
     "noImplicitAny": false,
@@ -9,7 +19,6 @@
     "moduleResolution": "node",
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "noEmit": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "baseUrl": ".",
@@ -32,16 +41,37 @@
 
       "deck.gl-test/*": ["test/*"]
     },
-    "typeRoots" : ["./node_modules/@types"]
-  },
-  "ts-node": {
-    // It is faster to skip typechecking. Remove if you want ts-node to do typechecking.
-    "transpileOnly": true
+    "typeRoots" : ["./node_modules/@types"],
+    "plugins": [
+      {
+        "transform": "@vis.gl/ts-plugins/ts-transform-version-inline"
+      },
+      {
+        "transform": "@vis.gl/ts-plugins/ts-transform-remove-glsl-comments",
+        "pattern": ["**/*.glsl.ts"]
+      },
+      {
+        "transform": "@vis.gl/ts-plugins/ts-transform-inline-webgl-constants"
+      },
+      {
+        "transform": "@vis.gl/ts-plugins/ts-transform-append-extension",
+        "extensions": [".js", ".glsl.js"],
+        "after": true
+      },
+      {
+        "transform": "@vis.gl/ts-plugins/ts-transform-append-extension",
+        "extensions": [".js", ".glsl.js"],
+        "afterDeclarations": true
+      }
+    ]
   },
   "include": [
     "modules",
-    "test"
+    "test",
+    "examples"
   ],
   "exclude": [
+    "**/node_modules",
+    "**/dist"
   ]
 }

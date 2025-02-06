@@ -1,22 +1,6 @@
-// Copyright (c) 2015 - 2017 Uber Technologies, Inc.
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in
-// all copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-// THE SOFTWARE.
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
 
 import LayerManager from './layer-manager';
 import ViewManager from './view-manager';
@@ -24,42 +8,41 @@ import MapView from '../views/map-view';
 import EffectManager from './effect-manager';
 import DeckRenderer from './deck-renderer';
 import DeckPicker from './deck-picker';
-import {WidgetManager, Widget, WidgetPlacement} from './widget-manager';
+import {WidgetManager, Widget} from './widget-manager';
 import Tooltip from './tooltip';
 import log from '../utils/log';
 import {deepEqual} from '../utils/deep-equal';
 import typedArrayManager from '../utils/typed-array-manager';
 import {VERSION} from './init';
 
-import {getBrowser} from '@probe.gl/env';
-import GL from '@luma.gl/constants';
-import {
-  AnimationLoop,
-  createGLContext,
-  instrumentGLContext,
-  setParameters,
-  Timeline,
-  lumaStats
-} from '@luma.gl/core';
+import {luma} from '@luma.gl/core';
+import {WebGLDevice, webgl2Adapter} from '@luma.gl/webgl';
+import {Timeline} from '@luma.gl/engine';
+import {AnimationLoop} from '@luma.gl/engine';
+import {GL} from '@luma.gl/constants';
+import type {Device, DeviceProps, Framebuffer, Parameters} from '@luma.gl/core';
+import type {ShaderModule} from '@luma.gl/shadertools';
+
 import {Stats} from '@probe.gl/stats';
 import {EventManager} from 'mjolnir.js';
 
 import assert from '../utils/assert';
-import {EVENTS} from './constants';
+import {EVENT_HANDLERS, RECOGNIZERS, RecognizerOptions} from './constants';
 
 import type {Effect} from './effect';
 import type {FilterContext} from '../passes/layers-pass';
 import type Layer from './layer';
 import type View from '../views/view';
 import type Viewport from '../viewports/viewport';
-import type {RecognizerOptions, MjolnirGestureEvent, MjolnirPointerEvent} from 'mjolnir.js';
-import type {Framebuffer} from '@luma.gl/core';
+import type {EventManagerOptions, MjolnirGestureEvent, MjolnirPointerEvent} from 'mjolnir.js';
 import type {TypedArrayManagerOptions} from '../utils/typed-array-manager';
 import type {ViewStateChangeParameters, InteractionState} from '../controllers/controller';
 import type {PickingInfo} from './picking/pick-info';
 import type {PickByPointOptions, PickByRectOptions} from './deck-picker';
 import type {LayersList} from './layer-manager';
 import type {TooltipContent} from './tooltip';
+import type {ViewStateMap, AnyViewStateOf, ViewOrViews, ViewStateObject} from './view-manager';
+import {CreateDeviceProps} from '@luma.gl/core';
 
 /* global document */
 
@@ -92,7 +75,7 @@ type CursorState = {
   isDragging: boolean;
 };
 
-export type DeckProps = {
+export type DeckProps<ViewsT extends ViewOrViews = null> = {
   /** Id of this Deck instance */
   id?: string;
   /** Width of the canvas, a number in pixels or a valid CSS string.
@@ -115,10 +98,8 @@ export type DeckProps = {
    */
   pickingRadius?: number;
 
-  /** WebGL parameters to be set before each frame is rendered.
-   * @see https://github.com/visgl/luma.gl/blob/8.5-release/modules/gltools/docs/api-reference/parameter-setting.md#parameters
-   */
-  parameters?: any;
+  /** WebGL parameters to be set before each frame is rendered. */
+  parameters?: Parameters;
   /** If supplied, will be called before a layer is drawn to determine whether it should be rendered. */
   layerFilter?: ((context: FilterContext) => boolean) | null;
 
@@ -126,15 +107,21 @@ export type DeckProps = {
    * @default `document.body`
    */
   parent?: HTMLDivElement | null;
+
   /** The canvas to render into.
    * Can be either a HTMLCanvasElement or the element id.
    * Will be auto-created if not supplied.
    */
   canvas?: HTMLCanvasElement | string | null;
-  /** WebGL context. Will be auto-created if not supplied. */
-  gl?: WebGLRenderingContext | null;
-  /** Additional options used when creating the WebGL context. */
-  glOptions?: WebGLContextAttributes;
+
+  /** Use an existing luma.gl GPU device. @note If not supplied, a new device will be created using props.deviceProps */
+  device?: Device | null;
+
+  /** A new device will be created using these props, assuming that an existing device is not supplied using props.device) */
+  deviceProps?: CreateDeviceProps;
+
+  /** WebGL context @deprecated Use props.deviceProps.webgl. Also note that preserveDrawingBuffers is true by default */
+  gl?: WebGL2RenderingContext | null;
 
   /**
    * The array of Layer instances to be rendered.
@@ -146,7 +133,7 @@ export type DeckProps = {
   /** A single View instance, or an array of `View` instances.
    * @default `new MapView()`
    */
-  views?: View | View[] | null;
+  views?: ViewsT;
   /** Options for viewport interactivity, e.g. pan, rotate and zoom with mouse, touch and keyboard.
    * This is a shorthand for defining interaction with the `views` prop if you are using the default view (i.e. a single `MapView`)
    */
@@ -155,21 +142,21 @@ export type DeckProps = {
    * An object that describes the view state for each view in the `views` prop.
    * Use if the camera state should be managed external to the `Deck` instance.
    */
-  viewState?: any;
+  viewState?: ViewStateMap<ViewsT> | null;
   /**
    * If provided, the `Deck` instance will track camera state changes automatically,
    * with `initialViewState` as its initial settings.
    */
-  initialViewState?: any;
+  initialViewState?: ViewStateMap<ViewsT> | null;
 
   /** Allow browser default touch actions.
    * @default `'none'`
    */
-  touchAction?: string;
-  /** Set Hammer.js recognizer options for gesture recognition. See documentation for details. */
-  eventRecognizerOptions?: {
-    [type: string]: RecognizerOptions;
-  };
+  touchAction?: EventManagerOptions['touchAction'];
+  /**
+   * Optional mjolnir.js recognizer options
+   */
+  eventRecognizerOptions?: RecognizerOptions;
 
   /** (Experimental) Render to a custom frame buffer other than to screen. */
   _framebuffer?: Framebuffer | null;
@@ -179,19 +166,25 @@ export type DeckProps = {
   _pickable?: boolean;
   /** (Experimental) Fine-tune attribute memory usage. See documentation for details. */
   _typedArrayManagerProps?: TypedArrayManagerOptions;
+  /** An array of Widget instances to be added to the parent element. */
+  widgets?: Widget[];
 
-  /** Called once the WebGL context has been initiated. */
-  onWebGLInitialized?: (gl: WebGLRenderingContext) => void;
+  /** Called once the GPU Device has been initiated. */
+  onDeviceInitialized?: (device: Device) => void;
+  /** @deprecated Called once the WebGL context has been initiated. */
+  onWebGLInitialized?: (gl: WebGL2RenderingContext) => void;
   /** Called when the canvas resizes. */
   onResize?: (dimensions: {width: number; height: number}) => void;
   /** Called when the user has interacted with the deck.gl canvas, e.g. using mouse, touch or keyboard. */
-  onViewStateChange?: (params: ViewStateChangeParameters & {viewId: string}) => any;
+  onViewStateChange?: <ViewStateT extends AnyViewStateOf<ViewsT>>(
+    params: ViewStateChangeParameters<ViewStateT>
+  ) => ViewStateT | null | void;
   /** Called when the user has interacted with the deck.gl canvas, e.g. using mouse, touch or keyboard. */
   onInteractionStateChange?: (state: InteractionState) => void;
   /** Called just before the canvas rerenders. */
-  onBeforeRender?: (context: {gl: WebGLRenderingContext}) => void;
+  onBeforeRender?: (context: {device: Device; gl: WebGL2RenderingContext}) => void;
   /** Called right after the canvas rerenders. */
-  onAfterRender?: (context: {gl: WebGLRenderingContext}) => void;
+  onAfterRender?: (context: {device: Device; gl: WebGL2RenderingContext}) => void;
   /** Called once after gl context and all Deck components are created. */
   onLoad?: () => void;
   /** Called if deck.gl encounters an error.
@@ -226,7 +219,7 @@ export type DeckProps = {
   drawPickingColors?: boolean;
 };
 
-const defaultProps = {
+const defaultProps: DeckProps = {
   id: '',
   width: '100%',
   height: '100%',
@@ -235,9 +228,10 @@ const defaultProps = {
   initialViewState: null,
   pickingRadius: 0,
   layerFilter: null,
-  glOptions: {},
   parameters: {},
   parent: null,
+  device: null,
+  deviceProps: {type: 'webgl'} as DeviceProps,
   gl: null,
   canvas: null,
   layers: [],
@@ -252,7 +246,9 @@ const defaultProps = {
   _pickable: true,
   _typedArrayManagerProps: {},
   _customRender: null,
+  widgets: [],
 
+  onDeviceInitialized: noop,
   onWebGLInitialized: noop,
   onResize: noop,
   onViewStateChange: noop,
@@ -276,103 +272,122 @@ const defaultProps = {
 };
 
 /* eslint-disable max-statements */
-export default class Deck {
+export default class Deck<ViewsT extends ViewOrViews = null> {
   static defaultProps = defaultProps;
   // This is used to defeat tree shaking of init.js
   // https://github.com/visgl/deck.gl/issues/3213
   static VERSION = VERSION;
 
-  readonly props: Required<DeckProps>;
+  readonly props: Required<DeckProps<ViewsT>>;
   readonly width: number = 0;
   readonly height: number = 0;
   // Allows attaching arbitrary data to the instance
   readonly userData: Record<string, any> = {};
 
+  protected device: Device | null = null;
+
   protected canvas: HTMLCanvasElement | null = null;
-  protected viewManager: ViewManager | null = null;
+  protected viewManager: ViewManager<View[]> | null = null;
   protected layerManager: LayerManager | null = null;
   protected effectManager: EffectManager | null = null;
   protected deckRenderer: DeckRenderer | null = null;
   protected deckPicker: DeckPicker | null = null;
   protected eventManager: EventManager | null = null;
   protected widgetManager: WidgetManager | null = null;
-  protected metrics: DeckMetrics;
-  protected animationLoop: AnimationLoop;
-  protected stats: Stats;
+  protected tooltip: Tooltip | null = null;
+  protected animationLoop: AnimationLoop | null = null;
 
   /** Internal view state if no callback is supplied */
-  protected viewState: any;
-  protected cursorState: CursorState;
+  protected viewState: ViewStateObject<ViewsT> | null;
+  protected cursorState: CursorState = {
+    isHovering: false,
+    isDragging: false
+  };
 
-  private _needsRedraw: false | string;
+  protected stats = new Stats({id: 'deck.gl'});
+  protected metrics: DeckMetrics = {
+    fps: 0,
+    setPropsTime: 0,
+    updateAttributesTime: 0,
+    framesRedrawn: 0,
+    pickTime: 0,
+    pickCount: 0,
+    gpuTime: 0,
+    gpuTimePerFrame: 0,
+    cpuTime: 0,
+    cpuTimePerFrame: 0,
+    bufferMemory: 0,
+    textureMemory: 0,
+    renderbufferMemory: 0,
+    gpuMemory: 0
+  };
+  private _metricsCounter: number = 0;
+
+  private _needsRedraw: false | string = 'Initial render';
   private _pickRequest: {
     mode: string;
     event: MjolnirPointerEvent | null;
     x: number;
     y: number;
     radius: number;
+  } = {
+    mode: 'hover',
+    x: -1,
+    y: -1,
+    radius: 0,
+    event: null
   };
+
   /**
    * Pick and store the object under the pointer on `pointerdown`.
    * This object is reused for subsequent `onClick` and `onDrag*` callbacks.
    */
   private _lastPointerDownInfo: PickingInfo | null = null;
-  private _metricsCounter: number;
 
-  constructor(props: DeckProps) {
+  constructor(props: DeckProps<ViewsT>) {
+    // @ts-ignore views
     this.props = {...defaultProps, ...props};
     props = this.props;
-
-    this._needsRedraw = 'Initial render';
-    this._pickRequest = {
-      mode: 'hover',
-      x: -1,
-      y: -1,
-      radius: 0,
-      event: null
-    };
-
-    this.cursorState = {
-      isHovering: false,
-      isDragging: false
-    };
 
     if (props.viewState && props.initialViewState) {
       log.warn(
         'View state tracking is disabled. Use either `initialViewState` for auto update or `viewState` for manual update.'
       )();
     }
-    if (getBrowser() === 'IE') {
-      log.warn('IE 11 is not supported')();
-    }
-    this.viewState = props.initialViewState;
+    this.viewState = this.props.initialViewState;
 
-    if (!props.gl) {
-      // Note: LayerManager creation deferred until gl context available
-      if (typeof document !== 'undefined') {
-        this.canvas = this._createCanvas(props);
+    // See if we already have a device
+    if (props.device) {
+      this.device = props.device;
+    }
+
+    let deviceOrPromise: Device | Promise<Device> | null = this.device;
+
+    // Attach a new luma.gl device to a WebGL2 context if supplied
+    if (!deviceOrPromise && props.gl) {
+      if (props.gl instanceof WebGLRenderingContext) {
+        log.error('WebGL1 context not supported.')();
       }
+      deviceOrPromise = webgl2Adapter.attach(props.gl);
     }
-    this.animationLoop = this._createAnimationLoop(props);
 
-    this.stats = new Stats({id: 'deck.gl'});
-    this.metrics = {
-      fps: 0,
-      setPropsTime: 0,
-      updateAttributesTime: 0,
-      framesRedrawn: 0,
-      pickTime: 0,
-      pickCount: 0,
-      gpuTime: 0,
-      gpuTimePerFrame: 0,
-      cpuTime: 0,
-      cpuTimePerFrame: 0,
-      bufferMemory: 0,
-      textureMemory: 0,
-      renderbufferMemory: 0,
-      gpuMemory: 0
-    };
-    this._metricsCounter = 0;
+    // Create a new device
+    if (!deviceOrPromise) {
+      // Create the "best" device supported from the registered adapters
+      deviceOrPromise = luma.createDevice({
+        type: 'best-available',
+        adapters: [webgl2Adapter],
+        ...props.deviceProps,
+        createCanvasContext: {
+          canvas: this._createCanvas(props),
+          useDevicePixels: this.props.useDevicePixels,
+          // TODO v9.2 - replace AnimationLoop's `autoResizeDrawingBuffer` with CanvasContext's `autoResize`
+          autoResize: false
+        }
+      });
+    }
+
+    this.animationLoop = this._createAnimationLoop(deviceOrPromise, props);
 
     this.setProps(props);
 
@@ -387,6 +402,7 @@ export default class Deck {
   /** Stop rendering and dispose all resources */
   finalize() {
     this.animationLoop?.stop();
+    this.animationLoop?.destroy();
     this.animationLoop = null;
     this._lastPointerDownInfo = null;
 
@@ -411,7 +427,7 @@ export default class Deck {
     this.widgetManager?.finalize();
     this.widgetManager = null;
 
-    if (!this.props.canvas && !this.props.gl && this.canvas) {
+    if (!this.props.canvas && !this.props.device && !this.props.gl && this.canvas) {
       // remove internally created canvas
       this.canvas.parentElement?.removeChild(this.canvas);
       this.canvas = null;
@@ -419,7 +435,7 @@ export default class Deck {
   }
 
   /** Partially update props */
-  setProps(props: DeckProps): void {
+  setProps(props: DeckProps<ViewsT>): void {
     this.stats.get('setProps Time').timeStart();
 
     if ('onLayerHover' in props) {
@@ -448,7 +464,7 @@ export default class Deck {
       width: number;
       height: number;
       views: View[];
-      viewState: Record<string, any>;
+      viewState: ViewStateObject<ViewsT> | null;
     } = Object.create(this.props);
     Object.assign(resolvedProps, {
       views: this._getViews(),
@@ -458,7 +474,7 @@ export default class Deck {
     });
 
     // Update the animation loop
-    this.animationLoop.setProps(resolvedProps);
+    this.animationLoop?.setProps(resolvedProps);
 
     // If initialized, update sub manager props
     if (this.layerManager) {
@@ -469,6 +485,7 @@ export default class Deck {
       this.effectManager!.setProps(resolvedProps);
       this.deckRenderer!.setProps(resolvedProps);
       this.deckPicker!.setProps(resolvedProps);
+      this.widgetManager!.setProps(resolvedProps);
     }
 
     this.stats.get('setProps Time').timeEnd();
@@ -560,6 +577,11 @@ export default class Deck {
     return this.viewManager.getViewports(rect);
   }
 
+  /** Get the current canvas element. */
+  getCanvas(): HTMLCanvasElement | null {
+    return this.canvas;
+  }
+
   /** Query the object rendered on top at a given point */
   pickObject(opts: {
     /** x position in pixels */
@@ -644,6 +666,14 @@ export default class Deck {
     this.effectManager!.addDefaultEffect(effect);
   }
 
+  _addDefaultShaderModule(module: ShaderModule<Record<string, unknown>>) {
+    this.layerManager!.addDefaultShaderModule(module);
+  }
+
+  _removeDefaultShaderModule(module: ShaderModule<Record<string, unknown>>) {
+    this.layerManager?.removeDefaultShaderModule(module);
+  }
+
   // Private Methods
 
   private _pick(
@@ -688,7 +718,7 @@ export default class Deck {
   }
 
   /** Resolve props.canvas to element */
-  private _createCanvas(props: DeckProps): HTMLCanvasElement {
+  private _createCanvas(props: DeckProps<ViewsT>): HTMLCanvasElement {
     let canvas = props.canvas;
 
     // TODO EventManager should accept element id
@@ -710,7 +740,7 @@ export default class Deck {
   }
 
   /** Updates canvas width and/or height, if provided as props */
-  private _setCanvasSize(props: Required<DeckProps>): void {
+  private _setCanvasSize(props: Required<DeckProps<ViewsT>>): void {
     if (!this.canvas) {
       return;
     }
@@ -750,58 +780,59 @@ export default class Deck {
     }
   }
 
-  private _createAnimationLoop(props: DeckProps): AnimationLoop {
+  private _createAnimationLoop(
+    deviceOrPromise: Device | Promise<Device>,
+    props: DeckProps<ViewsT>
+  ): AnimationLoop {
     const {
-      width,
-      height,
+      // width,
+      // height,
       gl,
-      glOptions,
-      debug,
+      // debug,
       onError,
-      onBeforeRender,
-      onAfterRender,
+      // onBeforeRender,
+      // onAfterRender,
       useDevicePixels
     } = props;
 
     return new AnimationLoop({
-      width,
-      height,
+      device: deviceOrPromise,
       useDevicePixels,
+      // TODO v9
       autoResizeDrawingBuffer: !gl, // do not auto resize external context
       autoResizeViewport: false,
-      gl,
-      onCreateContext: opts =>
-        createGLContext({
-          ...glOptions,
-          ...opts,
-          canvas: this.canvas,
-          debug,
-          onContextLost: () => this._onContextLost()
-        }),
-      onInitialize: context => this._setGLContext(context.gl),
+      // @ts-expect-error luma.gl needs to accept Promise<void> return value
+      onInitialize: context => this._setDevice(context.device),
+
       onRender: this._onRenderFrame.bind(this),
-      onBeforeRender,
-      onAfterRender,
+      // @ts-expect-error typing mismatch: AnimationLoop does not accept onError:null
       onError
+
+      // onBeforeRender,
+      // onAfterRender,
     });
   }
 
   // Get the most relevant view state: props.viewState, if supplied, shadows internal viewState
   // TODO: For backwards compatibility ensure numeric width and height is added to the viewState
-  private _getViewState(): Record<string, any> {
+  private _getViewState(): ViewStateObject<ViewsT> | null {
     return this.props.viewState || this.viewState;
   }
 
   // Get the view descriptor list
   private _getViews(): View[] {
-    // Default to a full screen map view port
-    let views = this.props.views || [new MapView({id: 'default-view'})];
-    views = Array.isArray(views) ? views : [views];
-    if (views.length && this.props.controller) {
+    const {views} = this.props;
+    const normalizedViews: View[] = Array.isArray(views)
+      ? views
+      : // If null, default to a full screen map view port
+        views
+        ? [views]
+        : [new MapView({id: 'default-view'})];
+    if (normalizedViews.length && this.props.controller) {
       // Backward compatibility: support controller prop
-      views[0].props.controller = this.props.controller;
+      normalizedViews[0].props.controller = this.props.controller;
     }
-    return views;
+    return normalizedViews;
   }
 
   private _onContextLost() {
@@ -886,43 +917,67 @@ export default class Deck {
     }
   }
 
-  private _setGLContext(gl: WebGLRenderingContext) {
-    if (this.layerManager) {
+  private _setDevice(device: Device) {
+    this.device = device;
+
+    if (!this.animationLoop) {
+      // finalize() has been called
       return;
     }
 
     // if external context...
     if (!this.canvas) {
-      this.canvas = gl.canvas;
-      instrumentGLContext(gl, {enable: true, copyState: true});
+      this.canvas = this.device.canvasContext?.canvas as HTMLCanvasElement;
+      // TODO v9
+      // ts-expect-error - Currently luma.gl v9 does not expose these options
+      // All WebGLDevice contexts are instrumented, but it seems the device
+      // should have a method to start state tracking even if not enabled?
+      // instrumentGLContext(this.device.gl, {enable: true, copyState: true});
     }
 
-    setParameters(gl, {
-      blend: true,
-      blendFunc: [GL.SRC_ALPHA, GL.ONE_MINUS_SRC_ALPHA, GL.ONE, GL.ONE_MINUS_SRC_ALPHA],
-      polygonOffsetFill: true,
-      depthTest: true,
-      depthFunc: GL.LEQUAL
-    });
+    if (this.device instanceof WebGLDevice) {
+      this.device.setParametersWebGL({
+        blend: true,
+        blendFunc: [GL.SRC_ALPHA, GL.ONE_MINUS_SRC_ALPHA, GL.ONE, GL.ONE_MINUS_SRC_ALPHA],
+        polygonOffsetFill: true,
+        depthTest: true,
+        depthFunc: GL.LEQUAL
+      });
+    }
 
-    this.props.onWebGLInitialized(gl);
+    this.props.onDeviceInitialized(this.device);
+    if (this.device instanceof WebGLDevice) {
+      // Legacy callback - warn?
+      this.props.onWebGLInitialized(this.device.gl);
+    }
 
     // timeline for transitions
     const timeline = new Timeline();
     timeline.play();
     this.animationLoop.attachTimeline(timeline);
 
-    this.eventManager = new EventManager(this.props.parent || gl.canvas, {
+    this.eventManager = new EventManager(this.props.parent || this.canvas, {
       touchAction: this.props.touchAction,
-      recognizerOptions: this.props.eventRecognizerOptions,
+      recognizers: Object.keys(RECOGNIZERS).map((eventName: string) => {
+        // Resolve recognizer settings
+        const [RecognizerConstructor, defaultOptions, recognizeWith, requestFailure] =
+          RECOGNIZERS[eventName];
+        const optionsOverride = this.props.eventRecognizerOptions?.[eventName];
+        const options = {...defaultOptions, ...optionsOverride, event: eventName};
+        return {
+          recognizer: new RecognizerConstructor(options),
+          recognizeWith,
+          requestFailure
+        };
+      }),
       events: {
         pointerdown: this._onPointerDown,
         pointermove: this._onPointerMove,
         pointerleave: this._onPointerMove
       }
     });
-    for (const eventType in EVENTS) {
-      this.eventManager.on(eventType as keyof typeof EVENTS, this._onEvent);
+    for (const eventType in EVENT_HANDLERS) {
+      this.eventManager.on(eventType, this._onEvent);
     }
 
     this.viewManager = new ViewManager({
@@ -941,24 +996,27 @@ export default class Deck {
     const viewport = this.viewManager.getViewports()[0];
 
     // Note: avoid React setState due GL animation loop / setState timing issue
-    this.layerManager = new LayerManager(gl, {
+    this.layerManager = new LayerManager(this.device, {
       deck: this,
       stats: this.stats,
       viewport,
       timeline
     });
 
-    this.effectManager = new EffectManager();
+    this.effectManager = new EffectManager({
+      deck: this,
+      device: this.device
+    });
 
-    this.deckRenderer = new DeckRenderer(gl);
+    this.deckRenderer = new DeckRenderer(this.device);
 
-    this.deckPicker = new DeckPicker(gl);
+    this.deckPicker = new DeckPicker(this.device);
 
     this.widgetManager = new WidgetManager({
       deck: this,
       parentElement: this.canvas?.parentElement
     });
-    this.widgetManager.add(new Tooltip(), {placement: 'fill'});
+    this.widgetManager.addDefault(new Tooltip());
 
     this.setProps(this.props);
 
@@ -981,11 +1039,9 @@ export default class Deck {
       clearCanvas?: boolean;
     }
   ) {
-    const {gl} = this.layerManager!.context;
+    const {device, gl} = this.layerManager!.context;
 
-    setParameters(gl, this.props.parameters);
-
-    this.props.onBeforeRender({gl});
+    this.props.onBeforeRender({device, gl});
 
     const opts = {
       target: this.props._framebuffer,
@@ -997,7 +1053,7 @@ export default class Deck {
       effects: this.effectManager!.getEffects(),
       ...renderOptions
     };
-    this.deckRenderer!.renderLayers(opts);
+    this.deckRenderer?.renderLayers(opts);
 
     if (opts.pass === 'screen') {
       // This method could be called when drawing to picking buffer, texture etc.
@@ -1008,12 +1064,12 @@ export default class Deck {
       });
     }
 
-    this.props.onAfterRender({gl});
+    this.props.onAfterRender({device, gl});
   }
 
   // Callbacks
 
-  private _onRenderFrame(animationProps: any) {
+  private _onRenderFrame() {
     this._getFrameStats();
 
     // Log perf stats every second
@@ -1075,10 +1131,10 @@ export default class Deck {
 
   /** Internal use only: event handler for click & drag */
   _onEvent = (event: MjolnirGestureEvent) => {
-    const eventOptions = EVENTS[event.type];
+    const eventHandlerProp = EVENT_HANDLERS[event.type];
     const pos = event.offsetCenter;
 
-    if (!eventOptions || !pos || !this.layerManager) {
+    if (!eventHandlerProp || !pos || !this.layerManager) {
       return;
     }
 
@@ -1095,9 +1151,8 @@ export default class Deck {
     ) as PickingInfo;
 
     const {layer} = info;
-    const layerHandler =
-      layer && (layer[eventOptions.handler] || layer.props[eventOptions.handler]);
-    const rootHandler = this.props[eventOptions.handler];
+    const layerHandler = layer && (layer[eventHandlerProp] || layer.props[eventHandlerProp]);
+    const rootHandler = this.props[eventHandlerProp];
     let handled = false;
 
     if (layerHandler) {
@@ -1126,7 +1181,7 @@ export default class Deck {
     stats.get('frameRate').timeStart();
 
     // Get individual stats from luma.gl so reset works
-    const animationLoopStats = this.animationLoop.stats;
+    const animationLoopStats = this.animationLoop!.stats;
     stats.get('GPU Time').addTime(animationLoopStats.get('GPU Time').lastTiming);
     stats.get('CPU Time').addTime(animationLoopStats.get('CPU Time').lastTiming);
   }
@@ -1149,7 +1204,7 @@ export default class Deck {
     metrics.gpuTimePerFrame = stats.get('GPU Time').getAverageTime();
     metrics.cpuTimePerFrame = stats.get('CPU Time').getAverageTime();
 
-    const memoryStats = lumaStats.get('Memory Usage');
+    const memoryStats = luma.stats.get('Memory Usage');
     metrics.bufferMemory = memoryStats.get('Buffer Memory').count;
     metrics.textureMemory = memoryStats.get('Texture Memory').count;
     metrics.renderbufferMemory = memoryStats.get('Renderbuffer Memory').count;

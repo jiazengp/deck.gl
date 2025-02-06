@@ -1,27 +1,29 @@
-import {LayerExtension} from '@deck.gl/core';
-import {Texture2D} from '@luma.gl/core';
-import GL from '@luma.gl/constants';
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
 
-import {patternShaders} from './shaders.glsl';
+import {LayerExtension} from '@deck.gl/core';
+
+import {FillStyleModuleProps, patternShaders} from './shader-module';
 
 import type {
   Layer,
   LayerContext,
+  DefaultProps,
   Accessor,
   AccessorFunction,
-  Texture,
+  TextureSource,
   UpdateParameters
 } from '@deck.gl/core';
+import type {Texture} from '@luma.gl/core';
 
-const defaultProps = {
+const defaultProps: DefaultProps<FillStyleExtensionProps> = {
   fillPatternEnabled: true,
   fillPatternAtlas: {
     type: 'image',
     value: null,
     async: true,
-    parameters: {
-      [GL.TEXTURE_MIN_FILTER]: GL.LINEAR
-    }
+    parameters: {lodMaxClamp: 0}
   },
   fillPatternMapping: {type: 'object', value: {}, async: true},
   fillPatternMask: true,
@@ -36,7 +38,7 @@ export type FillStyleExtensionProps<DataT = any> = {
    */
   fillPatternEnabled?: boolean;
   /** Sprite image url or texture that packs all your patterns into one layout. */
-  fillPatternAtlas?: string | Texture;
+  fillPatternAtlas?: string | TextureSource;
   /** Pattern names mapped to pattern definitions, or a url that points to a JSON file. */
   fillPatternMapping?:
     | string
@@ -71,7 +73,7 @@ export type FillStyleExtensionProps<DataT = any> = {
   getFillPatternOffset?: Accessor<DataT, [number, number]>;
 };
 
-type FillStyleExtensionOptions = {
+export type FillStyleExtensionOptions = {
   /** If `true`, adds the ability to tile the filled area with a pattern.
    * @default false
    */
@@ -112,46 +114,25 @@ export default class FillStyleExtension extends LayerExtension<FillStyleExtensio
       attributeManager!.add({
         fillPatternFrames: {
           size: 4,
+          stepMode: 'dynamic',
           accessor: 'getFillPattern',
-          transform: extension.getPatternFrame.bind(this),
-          shaderAttributes: {
-            fillPatternFrames: {
-              divisor: 0
-            },
-            instanceFillPatternFrames: {
-              divisor: 1
-            }
-          }
+          transform: extension.getPatternFrame.bind(this)
         },
         fillPatternScales: {
           size: 1,
+          stepMode: 'dynamic',
           accessor: 'getFillPatternScale',
-          defaultValue: 1,
-          shaderAttributes: {
-            fillPatternScales: {
-              divisor: 0
-            },
-            instanceFillPatternScales: {
-              divisor: 1
-            }
-          }
+          defaultValue: 1
         },
         fillPatternOffsets: {
           size: 2,
-          accessor: 'getFillPatternOffset',
-          shaderAttributes: {
-            fillPatternOffsets: {
-              divisor: 0
-            },
-            instanceFillPatternOffsets: {
-              divisor: 1
-            }
-          }
+          stepMode: 'dynamic',
+          accessor: 'getFillPatternOffset'
         }
       });
     }
     this.setState({
-      emptyTexture: new Texture2D(this.context.gl, {
+      emptyTexture: this.context.device.createTexture({
         data: new Uint8Array(4),
         width: 1,
         height: 1
@@ -178,14 +159,18 @@ export default class FillStyleExtension extends LayerExtension<FillStyleExtensio
       return;
     }
 
-    const {fillPatternAtlas} = this.props;
-    this.setModuleParameters({
-      fillPatternTexture: fillPatternAtlas || this.state.emptyTexture
-    });
+    const {fillPatternAtlas, fillPatternEnabled, fillPatternMask} = this.props;
+    const fillProps: FillStyleModuleProps = {
+      project: params.shaderModuleProps.project,
+      fillPatternEnabled,
+      fillPatternMask,
+      fillPatternTexture: (fillPatternAtlas || this.state.emptyTexture) as Texture
+    };
+    this.setShaderModuleProps({fill: fillProps});
   }
 
   finalizeState(this: Layer<FillStyleExtensionProps>) {
-    const {emptyTexture} = this.state;
+    const emptyTexture = this.state.emptyTexture as Texture;
     emptyTexture?.delete();
   }
 

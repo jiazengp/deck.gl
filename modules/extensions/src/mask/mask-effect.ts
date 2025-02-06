@@ -1,5 +1,17 @@
-import {Layer, Viewport, Effect, PreRenderOptions, CoordinateSystem, log} from '@deck.gl/core';
-import {Texture2D} from '@luma.gl/core';
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
+import {
+  Layer,
+  Viewport,
+  Effect,
+  EffectContext,
+  PreRenderOptions,
+  CoordinateSystem,
+  log
+} from '@deck.gl/core';
+import type {Texture} from '@luma.gl/core';
 import {equals} from '@math.gl/core';
 import MaskPass from './mask-pass';
 import {joinLayerBounds, getRenderBounds, makeViewport, Bounds} from '../utils/projection-utils';
@@ -7,7 +19,7 @@ import {joinLayerBounds, getRenderBounds, makeViewport, Bounds} from '../utils/p
 
 type Mask = {
   /** The channel index */
-  index: number;
+  index: 0 | 1 | 2 | 3;
   bounds: Bounds;
   coordinateOrigin: [number, number, number];
   coordinateSystem: CoordinateSystem;
@@ -15,7 +27,7 @@ type Mask = {
 
 type Channel = {
   id: string;
-  index: number;
+  index: 0 | 1 | 2 | 3;
   layers: Layer[];
   bounds: Bounds | null;
   maskBounds: Bounds;
@@ -35,24 +47,32 @@ export default class MaskEffect implements Effect {
   useInPicking = true;
   order = 0;
 
-  private dummyMaskMap?: Texture2D;
+  private dummyMaskMap?: Texture;
   private channels: (Channel | null)[] = [];
   private masks: Record<string, Mask> | null = null;
   private maskPass?: MaskPass;
-  private maskMap?: Texture2D;
+  private maskMap?: Texture;
   private lastViewport?: Viewport;
 
-  preRender(
-    gl: WebGLRenderingContext,
-    {layers, layerFilter, viewports, onViewportActive, views, isPicking}: PreRenderOptions
-  ): MaskPreRenderStats {
+  setup({device}: EffectContext) {
+    this.dummyMaskMap = device.createTexture({
+      width: 1,
+      height: 1
+    });
+
+    this.maskPass = new MaskPass(device, {id: 'default-mask'});
+    this.maskMap = this.maskPass.maskMap;
+  }
+
+  preRender({
+    layers,
+    layerFilter,
+    viewports,
+    onViewportActive,
+    views,
+    isPicking
+  }: PreRenderOptions): MaskPreRenderStats {
     let didRender = false;
-    if (!this.dummyMaskMap) {
-      this.dummyMaskMap = new Texture2D(gl, {
-        width: 1,
-        height: 1
-      });
-    }
 
     if (isPicking) {
       // Do not update on picking pass
@@ -66,11 +86,6 @@ export default class MaskEffect implements Effect {
       return {didRender};
     }
     this.masks = {};
-
-    if (!this.maskPass) {
-      this.maskPass = new MaskPass(gl, {id: 'default-mask'});
-      this.maskMap = this.maskPass.maskMap;
-    }
 
     // Map layers to channels
     const channelMap = this._sortMaskChannels(maskLayers);
@@ -159,8 +174,8 @@ export default class MaskEffect implements Effect {
           makeViewport({
             bounds: channelInfo.bounds!,
             viewport,
-            width: maskMap.width,
-            height: maskMap.height,
+            width: maskMap!.width,
+            height: maskMap!.height,
             border: 1
           });
 
@@ -175,8 +190,10 @@ export default class MaskEffect implements Effect {
           viewports: maskViewport ? [maskViewport] : [],
           onViewportActive,
           views,
-          moduleParameters: {
-            devicePixelRatio: 1
+          shaderModuleProps: {
+            project: {
+              devicePixelRatio: 1
+            }
           }
         });
 
@@ -246,13 +263,17 @@ export default class MaskEffect implements Effect {
     return channelMap;
   }
 
-  getModuleParameters(): {
-    maskMap: Texture2D;
-    maskChannels: Record<string, Mask> | null;
+  getShaderModuleProps(): {
+    mask: {
+      maskMap: Texture;
+      maskChannels: Record<string, Mask> | null;
+    };
   } {
     return {
-      maskMap: this.masks ? this.maskMap : this.dummyMaskMap,
-      maskChannels: this.masks
+      mask: {
+        maskMap: this.masks ? this.maskMap! : this.dummyMaskMap!,
+        maskChannels: this.masks
+      }
     };
   }
 

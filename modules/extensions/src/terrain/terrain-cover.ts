@@ -1,3 +1,7 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
 import {Framebuffer} from '@luma.gl/core';
 
 import type {Layer, Viewport} from '@deck.gl/core';
@@ -163,7 +167,7 @@ export class TerrainCover {
       return null;
     }
     if (!this.fbo) {
-      this.fbo = createRenderTarget(this.targetLayer.context.gl, {id: this.id});
+      this.fbo = createRenderTarget(this.targetLayer.context.device, {id: this.id});
     }
     return this.fbo;
   }
@@ -173,7 +177,10 @@ export class TerrainCover {
       return null;
     }
     if (!this.pickingFbo) {
-      this.pickingFbo = createRenderTarget(this.targetLayer.context.gl, {id: `${this.id}-picking`});
+      this.pickingFbo = createRenderTarget(this.targetLayer.context.device, {
+        id: `${this.id}-picking`,
+        interpolate: false
+      });
     }
     return this.pickingFbo;
   }
@@ -185,12 +192,12 @@ export class TerrainCover {
   delete() {
     const {fbo, pickingFbo} = this;
     if (fbo) {
-      fbo.texture.delete();
-      fbo.delete();
+      fbo.colorAttachments[0].destroy();
+      fbo.destroy();
     }
     if (pickingFbo) {
-      pickingFbo.texture.delete();
-      pickingFbo.delete();
+      pickingFbo.colorAttachments[0].destroy();
+      pickingFbo.destroy();
     }
   }
 }

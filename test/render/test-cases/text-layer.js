@@ -1,3 +1,7 @@
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
 import {COORDINATE_SYSTEM} from '@deck.gl/core';
 import {TextLayer} from '@deck.gl/layers';
 import {points} from 'deck.gl-test/data';
@@ -146,7 +150,7 @@ export default OS === 'Mac'
         },
         layers: [
           new TextLayer({
-            id: 'text-layer',
+            id: 'text-layer-2',
             data: points.slice(0, 10),
             coordinateOrigin: [-122.44, 37.75],
             coordinateSystem: COORDINATE_SYSTEM.METER_OFFSETS,
@@ -173,7 +177,7 @@ export default OS === 'Mac'
         },
         layers: [
           new TextLayer({
-            id: 'text-layer',
+            id: 'text-layer-2',
             data: points.slice(0, 5),
             coordinateOrigin: [-122.44, 37.75],
             coordinateSystem: COORDINATE_SYSTEM.METER_OFFSETS,
@@ -202,7 +206,7 @@ export default OS === 'Mac'
         },
         layers: [
           new TextLayer({
-            id: 'text-layer',
+            id: 'text-layer-2',
             data: points.slice(0, 10),
             coordinateOrigin: [-122.44, 37.75],
             coordinateSystem: COORDINATE_SYSTEM.METER_OFFSETS,

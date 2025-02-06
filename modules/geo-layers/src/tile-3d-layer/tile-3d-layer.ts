@@ -1,5 +1,8 @@
-import GL from '@luma.gl/constants';
-import {Geometry} from '@luma.gl/core';
+// deck.gl
+// SPDX-License-Identifier: MIT
+// Copyright (c) vis.gl contributors
+
+import {Geometry} from '@luma.gl/engine';
 
 import {
   Accessor,
@@ -44,7 +47,7 @@ const defaultProps: DefaultProps<Tile3DLayerProps> = {
 };
 
 /** All properties supported by Tile3DLayer */
-export type Tile3DLayerProps<DataT = any> = _Tile3DLayerProps<DataT> & CompositeLayerProps;
+export type Tile3DLayerProps<DataT = unknown> = _Tile3DLayerProps<DataT> & CompositeLayerProps;
 
 /** Props added by the Tile3DLayer */
 type _Tile3DLayerProps<DataT> = {
@@ -105,8 +108,7 @@ export default class Tile3DLayer<DataT = any, ExtraPropsT extends {} = {}> exten
   }
 
   get isLoaded(): boolean {
-    const {tileset3d} = this.state;
-    return tileset3d !== null && tileset3d.isLoaded();
+    return Boolean(this.state?.tileset3d?.isLoaded() && super.isLoaded);
   }
 
   shouldUpdateState({changeFlags}: UpdateParameters<this>): boolean {
@@ -178,10 +180,8 @@ export default class Tile3DLayer<DataT = any, ExtraPropsT extends {} = {}> exten
 
     // TODO: deprecate `loader` in v9.0
     // @ts-ignore
-    let loader = this.props.loader || this.props.loaders;
-    if (Array.isArray(loader)) {
-      loader = loader[0];
-    }
+    const loaders = this.props.loader || this.props.loaders;
+    const loader = Array.isArray(loaders) ? loaders[0] : loaders;
 
     const options = {loadOptions: {...loadOptions}};
     let actualTilesetUrl = tilesetUrl;
@@ -258,7 +258,7 @@ export default class Tile3DLayer<DataT = any, ExtraPropsT extends {} = {}> exten
       return null;
     }
 
-    switch (tileHeader.type) {
+    switch (tileHeader.type as TILE_TYPE) {
       case TILE_TYPE.POINTCLOUD:
         return this._makePointCloudLayer(tileHeader, oldLayer as PointCloudLayer<DataT>);
       case TILE_TYPE.SCENEGRAPH:
@@ -358,7 +358,7 @@ export default class Tile3DLayer<DataT = any, ExtraPropsT extends {} = {}> exten
     const geometry =
       (oldLayer && oldLayer.props.mesh) ||
       new Geometry({
-        drawMode: GL.TRIANGLES,
+        topology: 'triangle-list',
         attributes: getMeshGeometry(attributes),
         indices
       });

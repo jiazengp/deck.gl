@@ -39,6 +39,7 @@ class Deck(JSONMixin):
         effects=None,
         map_provider=BaseMapProvider.CARTO.value,
         parameters=None,
+        widgets=None
     ):
         """This is the renderer and configuration for a deck.gl visualization, similar to the
         `Deck <https://deck.gl/docs/api-reference/core/deck>`_ class from deck.gl.
@@ -87,6 +88,7 @@ class Deck(JSONMixin):
         else:
             self.layers = layers or []
         self.views = views
+        self.widgets = widgets
         # Use passed view state
         self.initial_view_state = initial_view_state
 
@@ -141,11 +143,13 @@ class Deck(JSONMixin):
 
     def show(self):
         """Display current Deck object for a Jupyter notebook"""
-        if in_google_colab:
-            self.to_html(notebook_display=True)
-        else:
-            self.update()
-            return self.deck_widget
+        # TODO: Jupyter-specific features not currently supported in pydeck v0.9.
+        # if in_google_colab:
+        #     self.to_html(notebook_display=True)
+        # else:
+        #     self.update()
+        #     return self.deck_widget
+        return self.to_html(notebook_display=True)
 
     def update(self):
         """Update a deck.gl map to reflect the current configuration
@@ -155,19 +159,23 @@ class Deck(JSONMixin):
 
         Intended for use in a Jupyter environment.
         """
-        if not has_jupyter_extra():
-            raise ImportError(
-                "Install the Jupyter extra for pydeck with your package manager, e.g. `pip install pydeck[jupyter]`"
-            )
-        self.deck_widget.json_input = self.to_json()
-        has_binary = False
-        binary_data_sets = []
-        for layer in self.layers:
-            if layer.use_binary_transport:
-                binary_data_sets.extend(layer.get_binary_data())
-                has_binary = True
-        if has_binary:
-            self.deck_widget.data_buffer = binary_data_sets
+        # TODO: Jupyter-specific features not currently supported in pydeck v0.9.
+        # if not has_jupyter_extra():
+        #     raise ImportError(
+        #         "Install the Jupyter extra for pydeck with your package manager, e.g. `pip install pydeck[jupyter]`"
+        #     )
+        # self.deck_widget.json_input = self.to_json()
+        # has_binary = False
+        # binary_data_sets = []
+        # for layer in self.layers:
+        #     if layer.use_binary_transport:
+        #         binary_data_sets.extend(layer.get_binary_data())
+        #         has_binary = True
+        # if has_binary:
+        #     self.deck_widget.data_buffer = binary_data_sets
+        raise NotImplementedError(
+            "Jupyter-specific features not currently supported in pydeck v0.9."
+        )
 
     def to_html(
         self,
