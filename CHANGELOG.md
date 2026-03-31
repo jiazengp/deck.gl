@@ -21,6 +21,8 @@ Ref: http://keepachangelog.com/en/0.3.0/
 
 ### deck.gl v9.3 Prereleases
 
+#### deck.gl [v9.3.0-alpha.5] - Mar 31 2026
+
 #### deck.gl [v9.3.0-alpha.4] - Mar 31 2026
 
 - fix(TerrainController): Better React controlled mode behavior (#10144)
